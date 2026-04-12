@@ -1,0 +1,10 @@
+.git
+.gitignore
+.env
+node_modules
+dist
+main
+*.exe
+frontend/node_modules
+frontend/dist
+.gemini
