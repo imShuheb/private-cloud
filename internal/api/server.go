@@ -2,10 +2,9 @@ package api
 
 import (
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 
+	"private-storage/frontend"
 	"private-storage/internal/storage"
 )
 
@@ -34,19 +33,27 @@ func NewHandler(store storage.Store, token, user, pass, bucket string) http.Hand
 	mux.Handle("POST /api/bulk-objects-delete", s.auth(http.HandlerFunc(s.handleDeleteObjects)))
 	mux.Handle("/api/objects/", s.auth(http.HandlerFunc(s.handleObject)))
 
+	distFS := frontend.GetDistFS()
+	fileServer := http.FileServer(http.FS(distFS))
+
 	staticHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api") {
 			return
 		}
 
-		path := filepath.Join("dist", r.URL.Path)
-		info, err := os.Stat(path)
-		if os.IsNotExist(err) || info.IsDir() {
-			http.ServeFile(w, r, filepath.Join("dist", "index.html"))
-			return
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			path = "index.html"
 		}
 
-		http.ServeFile(w, r, path)
+		// Check if file exists in embedded FS
+		_, err := distFS.Open(path)
+		if err != nil {
+			// If not found, serve index.html for SPA routing
+			r.URL.Path = "/"
+		}
+
+		fileServer.ServeHTTP(w, r)
 	})
 
 	mainHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

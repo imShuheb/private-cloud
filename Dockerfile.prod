@@ -1,0 +1,26 @@
+FROM alpine:latest
+
+ARG TARGETARCH
+
+WORKDIR /app
+
+RUN apk add --no-cache ca-certificates
+
+# Copy the pre-built binary for the correct architecture
+# This single file now contains the backend AND the frontend!
+COPY bin/linux-${TARGETARCH}/main .
+
+# Standard Environment Variables
+ENV SERVER_ADDR=0.0.0.0:8080
+ENV AUTH_USERNAME=admin
+ENV AUTH_PASSWORD=admin@123
+ENV S3_BUCKET=
+ENV S3_REGION=
+ENV S3_ENDPOINT=
+ENV S3_ACCESS_KEY=
+ENV S3_SECRET_KEY=
+ENV S3_USE_PATH_STYLE=false
+
+EXPOSE 8080
+
+CMD ["./main"]

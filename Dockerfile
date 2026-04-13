@@ -12,6 +12,8 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+# Copy the built frontend so it can be embedded into the binary
+COPY --from=frontend-builder /app/dist ./frontend/dist
 RUN CGO_ENABLED=0 GOOS=linux go build -o main .
 
 # --- Stage 3: Final Runtime ---
@@ -20,8 +22,8 @@ WORKDIR /app
 
 RUN apk add --no-cache ca-certificates
 
+# Copy ONLY the self-contained binary (frontend is embedded inside!)
 COPY --from=backend-builder /app/main .
-COPY --from=frontend-builder /app/dist ./dist
 
 # Standard Environment Variables
 ENV SERVER_ADDR=0.0.0.0:8080
