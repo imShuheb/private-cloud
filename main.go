@@ -11,6 +11,9 @@ import (
 	"private-storage/internal/storage"
 )
 
+// Version is injected during build time using ldflags
+var Version = "dev"
+
 func main() {
 	cfg, err := appconfig.LoadFromEnv()
 	if err != nil {
@@ -32,7 +35,7 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	log.Printf("Private storage server running at %s", cfg.ServerAddr)
+	log.Printf("Private storage server %s running at %s", Version, cfg.ServerAddr)
 	log.Printf("Bucket: %s", cfg.Bucket)
 	if cfg.Endpoint != "" {
 		log.Printf("S3 endpoint: %s", cfg.Endpoint)
