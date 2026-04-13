@@ -1,67 +1,60 @@
 # 🛡️ Private Storage
 
-A secure, modern S3-compatible cloud storage explorer. Manage your files with ease using a high-performance Go backend and a responsive React interface.
+A secure, modern S3-compatible cloud storage explorer. Manage multiple cloud storage accounts with ease using a high-performance Go backend and a responsive React interface.
 
 <p align="center">
   <img src="docs/assets/login.png" width="48%" alt="Login Screen" />
   <img src="docs/assets/inner.png" width="48%" alt="Dashboard Interface" />
 </p>
 
+## ✨ Highlights
+- **Multi-Tenant Ready**: Add and manage multiple S3 storage profiles (AWS, MinIO, R2, Wasabi).
+- **Encryption at Rest**: Your storage credentials (Access/Secret keys) are AES-GCM encrypted in settings.
+- **Dynamic Switching**: Swap between active buckets instantly via the dashboard.
+- **Modern Stack**: Built with Go 1.22+, React 18+, and Tailwind CSS.
+- **Security First**: Presigned URL support for secure uploads/downloads.
+
+---
+
 ## 🐳 Quick Start (Docker)
 
 The fastest way to run Private Storage is using Docker.
 
-1. **Clone & Configure**:
+1. **Clone & Launch**:
    ```bash
    git clone https://github.com/yourusername/private-storage.git
    cd private-storage
-   cp .env.example .env
-   # Edit .env and enter your S3 credentials (see Configuration below)
-   ```
-
-2. **Launch**:
-   ```bash
    docker compose up -d
    ```
 
-The application is now available at `http://localhost:8080`.
+2. **Login & Setup**:
+   - Access the dashboard at `http://localhost:8080`.
+   - Login with default credentials: `admin` / `admin@123`.
+   - Go to the **Connections Manager** to add your first storage bucket.
 
-### Alternative: Manual Docker Setup
+---
 
-If you prefer building and running the image manually without Docker Compose:
+## ⚙️ Configuration
 
-1. **Build the image**:
-   ```bash
-   docker build -t private-storage .
-   ```
+While storage is managed via the UI, you can set these environment variables in your `.env` for the server setup:
 
-2. **Run the container** (using your `.env` file):
-   ```bash
-   docker run -d -p 8080:8080 --env-file .env --name private-storage private-storage
-   ```
-
-   *Alternatively, run with explicit environment variables:*
-   ```bash
-   docker run -d -p 8080:8080 \
-     -e S3_BUCKET=your-bucket-name \
-     -e S3_ACCESS_KEY=your-access-key \
-     -e S3_SECRET_KEY=your-secret-key \
-     -e S3_REGION=us-east-1 \
-     --name private-storage private-storage
-   ```
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `AUTH_USERNAME` | Master Admin Username | `admin` |
+| `AUTH_PASSWORD` | Master Admin Password | `admin@123` |
+| `SERVER_ADDR` | Server bind address | `0.0.0.0:8080` |
+| `APP_SECRET` | Secret used for credential encryption | (Auto-generated) |
 
 ---
 
 ## 🛠️ Run from Source
-
-If you prefer to run the components manually:
 
 ### 1. Backend (Go)
 ```bash
 go run main.go
 ```
 
-### 2. Frontend (Vite)
+### 2. Frontend
 ```bash
 cd frontend
 npm install
@@ -70,27 +63,12 @@ npm run dev
 
 ---
 
-## ⚙️ Configuration
-
-Set these variables in your `.env` file to connect to your storage provider:
-
-| Variable | Description |
-|----------|-------------|
-| `S3_BUCKET` | Your S3 bucket name |
-| `S3_ACCESS_KEY` | S3 Access Key |
-| `S3_SECRET_KEY` | S3 Secret Key |
-| `S3_REGION` | S3 region (default: `us-east-1`) |
-| `S3_ENDPOINT` | Custom endpoint (for MinIO, R2, etc.) |
-| `AUTH_USERNAME` | Admin login username (default: `admin`) |
-| `AUTH_PASSWORD` | Admin login password (default: `admin@123`) |
+## 🔐 Security Note
+All storage credentials added through the dashboard are stored in `config/config.json`. To protect these keys, the application automatically encrypts them at rest using AES-GCM. For production deployments, it is recommended to set a custom `APP_SECRET` environment variable.
 
 ---
-
-## ✨ Highlights
-- **S3 Ready**: Works with AWS, MinIO, Cloudflare R2, and more.
-- **Secure**: Direct & Presigned URL support for safe transfers.
-- **Modern**: Built with Go 1.25, React 18, and Tailwind CSS v4.
-- **Lightweight**: Optimized for speed and minimal resource usage.
+## 📄 License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
 Made with ❤️ for private storage.

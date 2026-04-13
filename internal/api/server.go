@@ -1,30 +1,41 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strings"
+	"sync"
 
 	"private-storage/frontend"
+	"private-storage/internal/appconfig"
 	"private-storage/internal/storage"
 )
 
 type Server struct {
+	mu     sync.RWMutex
 	store  storage.Store
-	token  string
-	user   string
-	pass   string
-	bucket string
+	cfg    *appconfig.Config
 	sm     *sessionManager
 }
 
-func NewHandler(store storage.Store, token, user, pass, bucket string) http.Handler {
-	s := &Server{store: store, token: token, user: user, pass: pass, bucket: bucket, sm: newSessionManager()}
+func NewHandler(store storage.Store, cfg *appconfig.Config) http.Handler {
+	s := &Server{
+		store: store,
+		cfg:   cfg,
+		sm:    newSessionManager(),
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/auth/login", s.handleLogin)
 	mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/auth/me", s.handleAuthMe)
 	mux.HandleFunc("GET /api/health", s.handleHealth)
+
+	mux.Handle("/api/connections", s.auth(http.HandlerFunc(s.handleListConnections)))
+	mux.Handle("POST /api/connections", s.auth(http.HandlerFunc(s.handleAddConnection)))
+	mux.Handle("POST /api/connections/switch", s.auth(http.HandlerFunc(s.handleSwitchConnection)))
+	mux.Handle("DELETE /api/connections/", s.auth(http.HandlerFunc(s.handleDeleteConnection)))
+
 	mux.Handle("/api/drive/list", s.auth(http.HandlerFunc(s.handleDriveList)))
 	mux.Handle("/api/drive/stats", s.auth(http.HandlerFunc(s.handleDriveStats)))
 	mux.Handle("/api/drive/presign/upload", s.auth(http.HandlerFunc(s.handlePresignUpload)))
@@ -65,4 +76,18 @@ func NewHandler(store storage.Store, token, user, pass, bucket string) http.Hand
 	})
 
 	return loggingMiddleware(corsMiddleware(mainHandler))
+}
+
+func (s *Server) initStorage(ctx context.Context, conn *appconfig.Connection) (storage.Store, error) {
+	if conn == nil {
+		return nil, nil
+	}
+	return storage.NewS3Store(ctx, storage.S3Config{
+		Bucket:       conn.Bucket,
+		Region:       conn.Region,
+		Endpoint:     conn.Endpoint,
+		AccessKey:    conn.AccessKey,
+		SecretKey:    conn.SecretKey,
+		UsePathStyle: conn.UsePathStyle,
+	})
 }

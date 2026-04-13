@@ -31,14 +31,29 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := s.store.ListObjects(r.Context(), r.URL.Query().Get("prefix"), r.URL.Query().Get("continuationToken"), maxKeys)
+	s.mu.RLock()
+	store := s.store
+	activeConn := s.cfg.GetActiveConnection()
+	s.mu.RUnlock()
+
+	if store == nil {
+		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	result, err := store.ListObjects(r.Context(), r.URL.Query().Get("prefix"), r.URL.Query().Get("continuationToken"), maxKeys)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("list objects failed: %v", err), http.StatusBadGateway)
 		return
 	}
 
+	bucket := ""
+	if activeConn != nil {
+		bucket = activeConn.Bucket
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"bucket":                s.bucket,
+		"bucket":                bucket,
 		"items":                 result.Items,
 		"isTruncated":           result.IsTruncated,
 		"nextContinuationToken": result.NextContinuationToken,
@@ -59,7 +74,24 @@ func (s *Server) handleDriveList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := s.store.ListBrowser(r.Context(), r.URL.Query().Get("prefix"), r.URL.Query().Get("continuationToken"), maxKeys)
+	s.mu.RLock()
+	store := s.store
+	activeConn := s.cfg.GetActiveConnection()
+	s.mu.RUnlock()
+
+	if store == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"bucket": "",
+			"data": map[string]any{
+				"currentPrefix": r.URL.Query().Get("prefix"),
+				"folders":       []any{},
+				"files":         []any{},
+			},
+		})
+		return
+	}
+
+	result, err := store.ListBrowser(r.Context(), r.URL.Query().Get("prefix"), r.URL.Query().Get("continuationToken"), maxKeys)
 	if err != nil {
 		if err == storage.ErrNotFound {
 			http.Error(w, "folder not found", http.StatusNotFound)
@@ -69,8 +101,13 @@ func (s *Server) handleDriveList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	bucket := ""
+	if activeConn != nil {
+		bucket = activeConn.Bucket
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"bucket": s.bucket,
+		"bucket": bucket,
 		"data":   result,
 	})
 }
@@ -81,13 +118,32 @@ func (s *Server) handleDriveStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stats, err := s.store.GetStats(r.Context())
+	s.mu.RLock()
+	store := s.store
+	s.mu.RUnlock()
+
+	if store == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"totalSize":    0,
+			"totalFiles":   0,
+			"totalFolders": 0,
+			"isConfigured": false,
+		})
+		return
+	}
+
+	stats, err := store.GetStats(r.Context())
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to get drive stats: %v", err), http.StatusBadGateway)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, stats)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"totalSize":    stats.TotalSize,
+		"totalFiles":   stats.TotalFiles,
+		"totalFolders": stats.TotalFolders,
+		"isConfigured": true,
+	})
 }
 
 type presignUploadRequest struct {
@@ -119,14 +175,29 @@ func (s *Server) handlePresignUpload(w http.ResponseWriter, r *http.Request) {
 		expires = time.Duration(req.ExpiresIn) * time.Second
 	}
 
-	result, err := s.store.PresignUpload(r.Context(), key, req.ContentType, expires)
+	s.mu.RLock()
+	store := s.store
+	activeConn := s.cfg.GetActiveConnection()
+	s.mu.RUnlock()
+
+	if store == nil {
+		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	result, err := store.PresignUpload(r.Context(), key, req.ContentType, expires)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("presign upload failed: %v", err), http.StatusBadGateway)
 		return
 	}
 
+	bucket := ""
+	if activeConn != nil {
+		bucket = activeConn.Bucket
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"bucket": s.bucket,
+		"bucket": bucket,
 		"key":    key,
 		"upload": result,
 	})
@@ -152,14 +223,29 @@ func (s *Server) handlePresignDownload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := s.store.PresignDownload(r.Context(), key, expires)
+	s.mu.RLock()
+	store := s.store
+	activeConn := s.cfg.GetActiveConnection()
+	s.mu.RUnlock()
+
+	if store == nil {
+		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	result, err := store.PresignDownload(r.Context(), key, expires)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("presign download failed: %v", err), http.StatusBadGateway)
 		return
 	}
 
+	bucket := ""
+	if activeConn != nil {
+		bucket = activeConn.Bucket
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"bucket":   s.bucket,
+		"bucket":   bucket,
 		"key":      key,
 		"download": result,
 	})
@@ -190,20 +276,44 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request, key string
 		contentType = "application/octet-stream"
 	}
 
-	if err := s.store.UploadObject(r.Context(), key, contentType, r.Body); err != nil {
+	s.mu.RLock()
+	store := s.store
+	activeConn := s.cfg.GetActiveConnection()
+	s.mu.RUnlock()
+
+	if store == nil {
+		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := store.UploadObject(r.Context(), key, contentType, r.Body); err != nil {
 		http.Error(w, fmt.Sprintf("upload failed: %v", err), http.StatusBadGateway)
 		return
 	}
 
+	bucket := ""
+	if activeConn != nil {
+		bucket = activeConn.Bucket
+	}
+
 	writeJSON(w, http.StatusCreated, map[string]string{
 		"message": "uploaded",
-		"bucket":  s.bucket,
+		"bucket":  bucket,
 		"key":     key,
 	})
 }
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, key string) {
-	obj, err := s.store.DownloadObject(r.Context(), key)
+	s.mu.RLock()
+	store := s.store
+	s.mu.RUnlock()
+
+	if store == nil {
+		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	obj, err := store.DownloadObject(r.Context(), key)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("download failed: %v", err), http.StatusNotFound)
 		return
@@ -227,17 +337,33 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, key stri
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, key string) {
-	if err := s.store.DeleteObject(r.Context(), key); err != nil {
+	s.mu.RLock()
+	store := s.store
+	activeConn := s.cfg.GetActiveConnection()
+	s.mu.RUnlock()
+
+	if store == nil {
+		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := store.DeleteObject(r.Context(), key); err != nil {
 		http.Error(w, fmt.Sprintf("delete failed: %v", err), http.StatusBadGateway)
 		return
 	}
 
+	bucket := ""
+	if activeConn != nil {
+		bucket = activeConn.Bucket
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{
 		"message": "deleted",
-		"bucket":  s.bucket,
+		"bucket":  bucket,
 		"key":     key,
 	})
 }
+
 func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Keys []string `json:"keys"`
@@ -252,8 +378,17 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.mu.RLock()
+	store := s.store
+	s.mu.RUnlock()
+
+	if store == nil {
+		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
+		return
+	}
+
 	for _, key := range body.Keys {
-		if err := s.store.DeleteObject(r.Context(), key); err != nil {
+		if err := store.DeleteObject(r.Context(), key); err != nil {
 			http.Error(w, fmt.Sprintf("failed to delete %s: %v", key, err), http.StatusBadGateway)
 			return
 		}

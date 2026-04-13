@@ -70,7 +70,7 @@ jobs:
         run: npm run build
 
       - name: Build Backend
-        run: go build -ldflags "-X main.Version=${{ steps.get_version.outputs.VERSION }}" -v ./...
+        run: CGO_ENABLED=0 go build -ldflags "-X main.Version=${{ steps.get_version.outputs.VERSION }}" -v ./...
 
       - name: Test Backend
         run: go test -v ./...
@@ -141,8 +141,8 @@ jobs:
         run: |
           mkdir -p bin/linux-amd64 bin/linux-arm64
           LDFLAGS="-s -w -X main.Version=${{ steps.get_version.outputs.VERSION }}"
-          GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -trimpath -o bin/linux-amd64/main .
-          GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -trimpath -o bin/linux-arm64/main .
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -trimpath -o bin/linux-amd64/main .
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -trimpath -o bin/linux-arm64/main .
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -217,10 +217,10 @@ jobs:
         run: |
           mkdir -p dist
           LDFLAGS="-s -w -X main.Version=${{ steps.get_version.outputs.VERSION }}"
-          GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -trimpath -o dist/private-cloud-linux-amd64 .
-          GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -trimpath -o dist/private-cloud-windows-amd64.exe .
-          GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -trimpath -o dist/private-cloud-darwin-amd64 .
-          GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -trimpath -o dist/private-cloud-darwin-arm64 .
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -trimpath -o dist/private-cloud-linux-amd64 .
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -trimpath -o dist/private-cloud-windows-amd64.exe .
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -trimpath -o dist/private-cloud-darwin-amd64 .
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -trimpath -o dist/private-cloud-darwin-arm64 .
 
       - name: Generate Release Notes & Upload
         uses: softprops/action-gh-release@v2

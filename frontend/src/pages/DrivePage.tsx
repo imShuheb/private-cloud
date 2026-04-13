@@ -48,7 +48,7 @@ export default function DrivePage({ user, onLogout }: Props) {
     onConfirm: () => void
     isDangerous?: boolean
   }>({ isOpen: false, title: '', message: '', onConfirm: () => { } })
-  const [stats, setStats] = useState({ totalSize: 0, totalFiles: 0, totalFolders: 0 })
+  const [stats, setStats] = useState({ totalSize: 0, totalFiles: 0, totalFolders: 0, isConfigured: false })
   const [notFound, setNotFound] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const folderRef = useRef<HTMLInputElement>(null)
@@ -332,6 +332,7 @@ export default function DrivePage({ user, onLogout }: Props) {
           filesCount={stats.totalFiles}
           foldersCount={stats.totalFolders}
           totalSize={stats.totalSize}
+          isConfigured={stats.isConfigured}
         />
 
         <NewMenu

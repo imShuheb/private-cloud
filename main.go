@@ -15,20 +15,34 @@ import (
 var Version = "dev"
 
 func main() {
-	cfg, err := appconfig.LoadFromEnv()
+	cfg, err := appconfig.Load()
 	if err != nil {
 		log.Fatalf("config error: %v", err)
 	}
 
 	ctx := context.Background()
-	store, err := storage.NewS3Store(ctx, cfg)
-	if err != nil {
-		log.Fatalf("storage init error: %v", err)
+	var store storage.Store
+	activeConn := cfg.GetActiveConnection()
+	
+	if activeConn != nil {
+		s3Store, err := storage.NewS3Store(ctx, storage.S3Config{
+			Bucket:       activeConn.Bucket,
+			Region:       activeConn.Region,
+			Endpoint:     activeConn.Endpoint,
+			AccessKey:    activeConn.AccessKey,
+			SecretKey:    activeConn.SecretKey,
+			UsePathStyle: activeConn.UsePathStyle,
+		})
+		if err != nil {
+			log.Printf("Warning: failed to initialize active storage: %v", err)
+		} else {
+			store = s3Store
+		}
 	}
 
 	httpServer := &http.Server{
 		Addr:              cfg.ServerAddr,
-		Handler:           api.NewHandler(store, cfg.StorageToken, cfg.Username, cfg.Password, cfg.Bucket),
+		Handler:           api.NewHandler(store, cfg),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      120 * time.Second,
@@ -36,9 +50,10 @@ func main() {
 	}
 
 	log.Printf("Private storage server %s running at %s", Version, cfg.ServerAddr)
-	log.Printf("Bucket: %s", cfg.Bucket)
-	if cfg.Endpoint != "" {
-		log.Printf("S3 endpoint: %s", cfg.Endpoint)
+	if !cfg.IsConfigured() {
+		log.Println("WARNING: Server started in SETUP MODE. Please visit the dashboard to configure.")
+	} else if activeConn != nil {
+		log.Printf("Active Storage: %s (Bucket: %s)", activeConn.Name, activeConn.Bucket)
 	}
 
 	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {

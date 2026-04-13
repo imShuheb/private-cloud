@@ -17,7 +17,12 @@ func (s *Server) auth(next http.Handler) http.Handler {
 
 		bearer := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
 		xAPIKey := strings.TrimSpace(r.Header.Get("X-API-Key"))
-		if bearer != s.token && xAPIKey != s.token {
+
+		s.mu.RLock()
+		adminPass := s.cfg.AdminPass
+		s.mu.RUnlock()
+
+		if bearer != adminPass && xAPIKey != adminPass {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

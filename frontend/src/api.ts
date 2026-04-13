@@ -1,5 +1,35 @@
 import axios from 'axios'
-import type { DriveListResponse, PresignedRequest, User } from './types'
+import type {
+  DriveListResponse,
+  PresignedRequest,
+  User,
+  ConnectionsList,
+  Connection
+} from './types'
+
+export async function getConnections(): Promise<ConnectionsList> {
+  const res = await fetch('/api/connections')
+  if (!res.ok) throw new Error('Failed to fetch connections')
+  return res.json()
+}
+
+export async function switchConnection(id: string): Promise<void> {
+  const res = await fetch('/api/connections/switch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  })
+  if (!res.ok) throw new Error('Failed to switch connection')
+}
+
+export async function addConnection(conn: Connection): Promise<void> {
+  const res = await fetch('/api/connections', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(conn),
+  })
+  if (!res.ok) throw new Error('Failed to add connection')
+}
 
 const defaultBase = import.meta.env.VITE_API_BASE ?? ''
 const localBase = localStorage.getItem('ps_base_url') ?? ''
@@ -51,7 +81,12 @@ export async function deleteObjects(keys: string[]): Promise<void> {
 
 export async function getDriveStats() {
   const res = await client.get('/api/drive/stats')
-  return res.data as { totalSize: number; totalFiles: number; totalFolders: number }
+  return res.data as { 
+    totalSize: number; 
+    totalFiles: number; 
+    totalFolders: number;
+    isConfigured: boolean;
+  }
 }
 
 export async function listAll(prefix = '', limit = 1000) {

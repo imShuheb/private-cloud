@@ -1,5 +1,6 @@
 import React from 'react'
 import type { User } from '../../types'
+import ConnectionSwitcher from '../ConnectionSwitcher'
 
 type HeaderProps = {
   user: User
@@ -20,11 +21,11 @@ const Header: React.FC<HeaderProps> = ({ user, loading, query, onQueryChange, on
         <span className="font-['Google_Sans'] text-[22px] text-gray-700 font-normal tracking-tight">Private Storage</span>
       </div>
 
-      <div className="flex-1 max-w-[720px] relative group">
-        <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-500 text-xl group-focus-within:text-[#1a73e8] transition-colors">search</span>
+      <div className="flex-1 max-w-[720px] relative group h-10">
+        <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-500 text-xl group-focus-within:text-[#1a73e8] transition-colors pointer-events-none">search</span>
         <input
           id="search-input"
-          className="w-full pl-11 pr-4 py-2.5 border-none rounded-full bg-[#f1f3f4] text-sm text-gray-900 outline-none transition-all placeholder-gray-500"
+          className="w-full pl-11 pr-4 py-2 border-none rounded-lg bg-[#f1f3f4] text-sm text-gray-900 outline-none transition-all focus:bg-white focus:ring-1 focus:ring-gray-200 focus:shadow-sm"
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           placeholder="Search in Drive"
@@ -32,27 +33,31 @@ const Header: React.FC<HeaderProps> = ({ user, loading, query, onQueryChange, on
         />
       </div>
 
-      <div className="flex items-center gap-1 ml-auto">
-        <button
-          className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-600 transition-colors disabled:opacity-40"
-          onClick={onRefresh}
-          disabled={loading}
-          title="Refresh"
-        >
-          <span className={`material-symbols-outlined ${loading ? 'animate-spin' : ''}`}>refresh</span>
-        </button>
-        <button
-          className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-600 transition-colors"
-          onClick={onLogout}
-          title="Sign out"
-        >
-          <span className="material-symbols-outlined">logout</span>
-        </button>
-        <div
-          className="w-8 h-8 rounded-full bg-[#1a73e8] text-white flex items-center justify-center text-sm font-semibold uppercase cursor-pointer hover:ring-4 hover:ring-[#1a73e8]/10 transition-all ml-1 shadow-sm"
-          title={`${user.username}`}
-        >
-          {userInitial}
+      <div className="flex items-center gap-3 ml-auto">
+        <ConnectionSwitcher />
+        
+        <div className="flex items-center gap-1 border-l border-gray-100 pl-3">
+          <button
+            className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-600 transition-colors disabled:opacity-40"
+            onClick={onRefresh}
+            disabled={loading}
+            title="Refresh"
+          >
+            <span className={`material-symbols-outlined text-xl ${loading ? 'animate-spin' : ''}`}>refresh</span>
+          </button>
+          <button
+            className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-600 transition-colors"
+            onClick={onLogout}
+            title="Sign out"
+          >
+            <span className="material-symbols-outlined text-xl">logout</span>
+          </button>
+          <div
+            className="w-8 h-8 rounded-full bg-[#1a73e8] text-white flex items-center justify-center text-sm font-semibold uppercase cursor-pointer hover:ring-4 hover:ring-[#1a73e8]/10 transition-all ml-1 shadow-sm"
+            title={`${user.username}`}
+          >
+            {userInitial}
+          </div>
         </div>
       </div>
     </header>

@@ -13,8 +13,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3Types "github.com/aws/aws-sdk-go-v2/service/s3/types"
-
-	"private-storage/internal/appconfig"
 )
 
 type S3Store struct {
@@ -23,7 +21,16 @@ type S3Store struct {
 	ps     *s3.PresignClient
 }
 
-func NewS3Store(ctx context.Context, cfg appconfig.Config) (*S3Store, error) {
+type S3Config struct {
+	Bucket       string
+	Region       string
+	Endpoint     string
+	AccessKey    string
+	SecretKey    string
+	UsePathStyle bool
+}
+
+func NewS3Store(ctx context.Context, cfg S3Config) (*S3Store, error) {
 	cfgOpts := []func(*config.LoadOptions) error{config.WithRegion(cfg.Region)}
 	if cfg.AccessKey != "" && cfg.SecretKey != "" {
 		cfgOpts = append(cfgOpts, config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, "")))

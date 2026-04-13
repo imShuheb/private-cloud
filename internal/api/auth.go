@@ -21,16 +21,19 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	username := strings.TrimSpace(req.Username)
 	password := req.Password
 
-	if username != s.user || password != s.pass {
+	s.mu.RLock()
+	adminUser := s.cfg.AdminUser
+	adminPass := s.cfg.AdminPass
+	s.mu.RUnlock()
+
+	if username != adminUser || password != adminPass {
 		if username == "" || password == "" {
 			http.Error(w, "username and password are required", http.StatusBadRequest)
 			return
 		}
 
-		if password != s.token {
-			http.Error(w, "invalid credentials", http.StatusUnauthorized)
-			return
-		}
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return
 	}
 
 	sessionID, expiresAt, err := s.sm.create(username)
@@ -53,7 +56,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		"authenticated": true,
 		"expiresAt":     expiresAt,
 		"user": map[string]string{
-			"username": s.user,
+			"username": adminUser,
 		},
 	})
 }

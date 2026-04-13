@@ -34,3 +34,19 @@ export type PresignedRequest = {
   headers?: Record<string, string>
   expiresAt?: string
 }
+
+export type Connection = {
+  id: string
+  name: string
+  bucket: string
+  region: string
+  endpoint?: string
+  accessKey: string
+  secretKey: string
+  usePathStyle: boolean
+}
+
+export type ConnectionsList = {
+  connections: Connection[]
+  activeId: string
+}
