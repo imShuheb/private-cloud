@@ -79,6 +79,8 @@ jobs:
     needs: build-and-test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       new_tag: ${{ steps.check_tag.outputs.new_tag }}
       version: ${{ steps.check_tag.outputs.version }}
