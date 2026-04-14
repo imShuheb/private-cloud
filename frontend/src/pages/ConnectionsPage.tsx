@@ -116,20 +116,20 @@ export default function ConnectionsPage({ user, onLogout }: Props) {
             </div>
 
             <div className="grid gap-4">
-              {data?.connections?.map((conn) => (
+              {data?.connections?.map((conn: Connection) => (
                 <div
                   key={conn.id}
-                  className={`p-6 rounded-lg border transition-all ${conn.id === data.activeId ? 'bg-blue-50/30 border-blue-200 ring-1 ring-blue-100' : 'bg-white border-gray-100 hover:border-gray-400'}`}
+                  className={`p-6 rounded-lg border transition-all ${conn.id === data?.activeId ? 'bg-blue-50/30 border-blue-200 ring-1 ring-blue-100' : 'bg-white border-gray-100 hover:border-gray-400'}`}
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4">
-                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${conn.id === data.activeId ? 'bg-blue-600' : 'bg-gray-100'}`}>
-                        <span className={`material-symbols-outlined ${conn.id === data.activeId ? 'text-white' : 'text-gray-400'}`}>hub</span>
+                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${conn.id === data?.activeId ? 'bg-blue-600' : 'bg-gray-100'}`}>
+                        <span className={`material-symbols-outlined ${conn.id === data?.activeId ? 'text-white' : 'text-gray-400'}`}>hub</span>
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
                           <h3 className="font-bold text-gray-900">{conn.name}</h3>
-                          {conn.id === data.activeId && (
+                          {conn.id === data?.activeId && (
                             <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider rounded-full">Active</span>
                           )}
                         </div>
@@ -138,7 +138,7 @@ export default function ConnectionsPage({ user, onLogout }: Props) {
                     </div>
 
                     <div className="flex items-center gap-2">
-                      {conn.id !== data.activeId && (
+                      {conn.id !== data?.activeId && (
                         <button
                           onClick={() => handleSetActive(conn.id)}
                           className="px-4 py-2 text-xs font-bold text-gray-700 hover:bg-gray-100 rounded-lg transition-all"
@@ -158,7 +158,7 @@ export default function ConnectionsPage({ user, onLogout }: Props) {
                       </button>
                       <button
                         onClick={() => handleDelete(conn.id)}
-                        disabled={conn.id === data.activeId}
+                        disabled={conn.id === data?.activeId}
                         className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all disabled:opacity-30 disabled:hover:bg-transparent"
                         title="Delete"
                       >
@@ -174,7 +174,7 @@ export default function ConnectionsPage({ user, onLogout }: Props) {
                     </div>
                     <div className="flex items-center gap-1.5 text-xs text-gray-400">
                       <span className="material-symbols-outlined text-sm">enhanced_encryption</span>
-                      {conn.accessKey.slice(0, 8)}...
+                      {conn.accessKey?.slice(0, 8) || '********'}...
                     </div>
                   </div>
                 </div>

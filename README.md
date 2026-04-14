@@ -47,6 +47,18 @@ While storage is managed via the UI, you can set these environment variables in 
 
 ---
 
+## 🚀 The Vision: Storage Insight v2.0
+
+We are evolving. The next major milestone transitions **Private Storage** from a simple file explorer into a definitive **Community Utility for Storage Observability**.
+
+- **Phase 1: Foundation**: Moving to a PostgreSQL + TimescaleDB backend to handle large-scale usage tracking reliably.
+- **Phase 2: Insight**: Ingesting S3 Inventory Reports to highlight "Storage Waste" (orphan uploads, ghost data) for every developer.
+- **Phase 3: Sovereignty**: Mapping egress costs and simulating cloud migrations to empower users to avoid cloud lock-in.
+
+Check out the detailed **[Community Roadmap](docs/plan/04_release_schedule.md)** to see how we are building this for the developer community.
+
+---
+
 ## 🛠️ Run from Source
 
 ### 1. Backend (Go)
