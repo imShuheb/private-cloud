@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { deleteObject, deleteObjects, listDrive, listAll, logout, presignDownload, presignUpload, getDriveStats } from '../api'
+import { deleteObject, deleteObjects, listDrive, listAll, logout, presignDownload, presignUpload, getDriveStats, objectDownloadUrl } from '../api'
 import { pathSegments } from '../lib'
 import type { FileInfo, DriveListData, User } from '../types'
 
@@ -49,6 +49,7 @@ export default function DrivePage({ user, onLogout }: Props) {
     isDangerous?: boolean
   }>({ isOpen: false, title: '', message: '', onConfirm: () => { } })
   const [stats, setStats] = useState({ totalSize: 0, totalFiles: 0, totalFolders: 0, isConfigured: false })
+  const [statsLoaded, setStatsLoaded] = useState(false)
   const [notFound, setNotFound] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const folderRef = useRef<HTMLInputElement>(null)
@@ -65,6 +66,7 @@ export default function DrivePage({ user, onLogout }: Props) {
       list = searchResults
         .filter(item => item.key.endsWith('/'))
         .map(item => ({
+          ...item,
           prefix: item.key,
           name: item.key.split('/').filter(Boolean).pop() || item.key
         }))
@@ -112,6 +114,7 @@ export default function DrivePage({ user, onLogout }: Props) {
       }
     } finally {
       setLoading(false)
+      setStatsLoaded(true)
     }
   }, [prefix])
 
@@ -244,13 +247,28 @@ export default function DrivePage({ user, onLogout }: Props) {
     })
   }
 
-  async function handleDownload(file: FileInfo) {
+  async function handlePreview(file: FileInfo) {
     try {
       const signed = await presignDownload(file.key)
       window.open(signed.url, '_blank', 'noopener')
-      setStatus(`Opening download for ${file.name}`)
+      setStatus(`Opening preview for ${file.name}`)
     } catch (err: any) {
-      setStatus(err?.message || 'Download initialization failed')
+      setStatus(err?.message || 'Preview initialization failed')
+    }
+  }
+
+  async function handleDownload(file: FileInfo) {
+    try {
+      const link = document.createElement('a')
+      link.href = objectDownloadUrl(file.key)
+      link.download = file.name || file.key.split('/').pop() || 'download'
+      link.rel = 'noopener'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      setStatus(`Downloading ${file.name}`)
+    } catch (err: any) {
+      setStatus(err?.message || 'Download failed')
     }
   }
 
@@ -316,7 +334,7 @@ export default function DrivePage({ user, onLogout }: Props) {
   }, [query])
 
   return (
-    <div className="h-screen flex flex-col bg-[#f8f9fa] overflow-hidden selection:bg-blue-100 selection:text-blue-700">
+    <div className="h-screen flex flex-col bg-white overflow-hidden selection:bg-black selection:text-white">
       <Header
         user={user}
         loading={loading}
@@ -326,13 +344,14 @@ export default function DrivePage({ user, onLogout }: Props) {
         onLogout={doLogout}
       />
 
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden min-h-0">
         <Sidebar
           onNewClick={() => setShowNewMenu(!showNewMenu)}
           filesCount={stats.totalFiles}
           foldersCount={stats.totalFolders}
           totalSize={stats.totalSize}
           isConfigured={stats.isConfigured}
+          connectionsLoading={!statsLoaded}
         />
 
         <NewMenu
@@ -348,7 +367,10 @@ export default function DrivePage({ user, onLogout }: Props) {
           folderInputRef={folderInputRef}
         />
 
-        <main className="flex-1 flex flex-col overflow-hidden bg-white mt-1.5 ml-1.5 rounded-tl-xl border-t border-l border-gray-100 shadow-[0_-1px_3px_rgba(0,0,0,0.02)]">
+        <main className="flex-1 flex flex-col overflow-hidden bg-white border-l border-gray-200 min-h-0 relative">
+          {loading && (
+            <div className="absolute top-0 left-0 right-0 h-0.5 bg-gray-500 animate-pulse z-20" />
+          )}
           <Toolbar
             segments={segments}
             sortBy={sortBy}
@@ -361,19 +383,27 @@ export default function DrivePage({ user, onLogout }: Props) {
             onBulkDelete={handleBulkDelete}
           />
 
-          <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-200 hover:scrollbar-thumb-gray-300">
-            {notFound ? (
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto">
+            {loading && !data ? (
+              <div className="p-4 md:p-6 space-y-3">
+                <div className="h-10 border border-gray-200 bg-gray-50 animate-pulse" />
+                <div className="h-10 border border-gray-200 bg-gray-50 animate-pulse" />
+                <div className="h-10 border border-gray-200 bg-gray-50 animate-pulse" />
+                <div className="h-10 border border-gray-200 bg-gray-50 animate-pulse" />
+                <div className="h-10 border border-gray-200 bg-gray-50 animate-pulse" />
+              </div>
+            ) : notFound ? (
               <div className="flex flex-col items-center justify-center h-full text-center p-8">
-                <div className="w-24 h-24 bg-gray-50 rounded-full flex items-center justify-center mb-6">
-                  <span className="material-symbols-outlined text-5xl text-gray-300">folder_off</span>
+                <div className="w-24 h-24 border border-black flex items-center justify-center mb-6">
+                  <span className="material-symbols-outlined text-5xl text-black">folder_off</span>
                 </div>
-                <h2 className="text-xl font-bold text-gray-900 mb-2">Folder Not Found</h2>
-                <p className="text-gray-500 mb-8 max-w-xs">
+                <h2 className="text-xl font-bold text-black mb-2 uppercase tracking-wide">Folder Not Found</h2>
+                <p className="text-gray-700 mb-8 max-w-xs">
                   This folder doesn't exist or has been moved.
                 </p>
                 <button
                   onClick={() => navigateTo('')}
-                  className="px-6 py-2.5 bg-[#1a73e8] text-white rounded-lg font-bold shadow-sm hover:shadow-md transition-all active:scale-95"
+                  className="px-6 py-2.5 bg-black text-white font-bold border border-black hover:bg-neutral-900"
                 >
                   Back to My Drive
                 </button>
@@ -383,6 +413,7 @@ export default function DrivePage({ user, onLogout }: Props) {
                 folders={folders}
                 files={files}
                 onFolderClick={navigateTo}
+                onPreview={handlePreview}
                 onDownload={handleDownload}
                 onDelete={handleDelete}
                 isSearching={isSearching}
@@ -391,6 +422,15 @@ export default function DrivePage({ user, onLogout }: Props) {
               />
             )}
           </div>
+
+          {loading && data && (
+            <div className="absolute inset-0 bg-white/55 backdrop-blur-[1px] pointer-events-none flex items-start justify-center pt-14 z-10">
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-300 shadow-sm text-xs font-semibold uppercase tracking-wider text-black">
+                <span className="w-3.5 h-3.5 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                Loading
+              </div>
+            </div>
+          )}
         </main>
       </div>
 

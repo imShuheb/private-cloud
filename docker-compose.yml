@@ -3,8 +3,14 @@ services:
     build: .
     ports:
       - "8080:8080"
+      - "2022:2022"
     volumes:
       - ./config:/app/config
     env_file:
       - .env
+    environment:
+      - SFTP_ENABLED=${SFTP_ENABLED:-false}
+      - SFTP_ADDR=0.0.0.0:2022
+      - SFTP_USER=${SFTP_USER:-}
+      - SFTP_PASSWORD=${SFTP_PASSWORD:-}
     restart: unless-stopped

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -21,12 +22,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	username := strings.TrimSpace(req.Username)
 	password := req.Password
 
-	s.mu.RLock()
+	s.mu.Lock()
 	adminUser := s.cfg.AdminUser
-	adminPass := s.cfg.AdminPass
-	s.mu.RUnlock()
+	validPassword, upgraded := s.cfg.VerifyAdminPassword(password)
+	if upgraded {
+		if err := s.cfg.Save(); err != nil {
+			log.Printf("failed to persist upgraded password hash: %v", err)
+		}
+	}
+	s.mu.Unlock()
 
-	if username != adminUser || password != adminPass {
+	if username != adminUser || !validPassword {
 		if username == "" || password == "" {
 			http.Error(w, "username and password are required", http.StatusBadRequest)
 			return
@@ -48,7 +54,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   false,
+		Secure:   isSecureRequest(r),
 		Expires:  expiresAt,
 	})
 
@@ -73,7 +79,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   false,
+		Secure:   isSecureRequest(r),
 		MaxAge:   -1,
 	})
 

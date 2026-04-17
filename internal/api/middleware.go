@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"log"
 	"net/http"
 	"net/url"
@@ -19,15 +20,38 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		xAPIKey := strings.TrimSpace(r.Header.Get("X-API-Key"))
 
 		s.mu.RLock()
-		adminPass := s.cfg.AdminPass
+		adminAPIKey := s.cfg.AdminAPIKey
 		s.mu.RUnlock()
 
-		if bearer != adminPass && xAPIKey != adminPass {
+		if !isMatchingAPIKey(adminAPIKey, bearer) && !isMatchingAPIKey(adminAPIKey, xAPIKey) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isMatchingAPIKey(expected, provided string) bool {
+	if expected == "" || provided == "" {
+		return false
+	}
+	if len(expected) != len(provided) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) == 1
+}
+
+func isSecureRequest(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Ssl")), "on") {
+		return true
+	}
+	return false
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {

@@ -4,32 +4,10 @@ import type {
   PresignedRequest,
   User,
   ConnectionsList,
-  Connection
+  Connection,
+  AppSettings,
+  UpdateAppSettings
 } from './types'
-
-export async function getConnections(): Promise<ConnectionsList> {
-  const res = await fetch('/api/connections')
-  if (!res.ok) throw new Error('Failed to fetch connections')
-  return res.json()
-}
-
-export async function switchConnection(id: string): Promise<void> {
-  const res = await fetch('/api/connections/switch', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id }),
-  })
-  if (!res.ok) throw new Error('Failed to switch connection')
-}
-
-export async function addConnection(conn: Connection): Promise<void> {
-  const res = await fetch('/api/connections', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(conn),
-  })
-  if (!res.ok) throw new Error('Failed to add connection')
-}
 
 const defaultBase = import.meta.env.VITE_API_BASE ?? ''
 const localBase = localStorage.getItem('ps_base_url') ?? ''
@@ -38,6 +16,23 @@ const client = axios.create({
   baseURL: localBase || defaultBase,
   withCredentials: true,
 })
+
+export async function getConnections(): Promise<ConnectionsList> {
+  const res = await client.get('/api/connections')
+  return res.data as ConnectionsList
+}
+
+export async function switchConnection(id: string): Promise<void> {
+  await client.post('/api/connections/switch', { id })
+}
+
+export async function addConnection(conn: Connection): Promise<void> {
+  await client.post('/api/connections', conn)
+}
+
+export async function deleteConnection(id: string): Promise<void> {
+  await client.delete(`/api/connections/${encodeURIComponent(id)}`)
+}
 
 export async function login(username: string, password: string): Promise<User> {
   const res = await client.post('/api/auth/login', { username, password })
@@ -71,6 +66,16 @@ export async function presignDownload(key: string): Promise<PresignedRequest> {
   return res.data.download as PresignedRequest
 }
 
+export function objectDownloadUrl(key: string): string {
+  const safeKey = encodeURI(key)
+  const path = `/api/objects/${safeKey}`
+
+  const base = (localBase || defaultBase || '').trim()
+  if (!base) return path
+
+  return `${base.replace(/\/$/, '')}${path}`
+}
+
 export async function deleteObject(key: string): Promise<void> {
   await client.delete(`/api/objects/${encodeURI(key)}`)
 }
@@ -92,4 +97,20 @@ export async function getDriveStats() {
 export async function listAll(prefix = '', limit = 1000) {
   const res = await client.get('/api/objects', { params: { prefix, limit } })
   return res.data.items as any[]
+}
+
+export async function getSettings(): Promise<AppSettings> {
+  const res = await client.get('/api/settings')
+  return res.data as AppSettings
+}
+
+export async function updateSettings(payload: UpdateAppSettings): Promise<AppSettings> {
+  const body = {
+    sftpEnabled: payload.sftpEnabled,
+    sftpAddr: payload.sftpAddr,
+    sftpUser: payload.sftpUser,
+    sftpPassword: payload.sftpPassword ?? '',
+  }
+  const res = await client.put('/api/settings', body)
+  return res.data as AppSettings
 }

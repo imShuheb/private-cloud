@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -12,10 +13,11 @@ import (
 )
 
 type Server struct {
-	mu     sync.RWMutex
-	store  storage.Store
-	cfg    *appconfig.Config
-	sm     *sessionManager
+	mu      sync.RWMutex
+	store   storage.Store
+	cfg     *appconfig.Config
+	sm      *sessionManager
+	sftpCtl *sftpController
 }
 
 func NewHandler(store storage.Store, cfg *appconfig.Config) http.Handler {
@@ -23,6 +25,10 @@ func NewHandler(store storage.Store, cfg *appconfig.Config) http.Handler {
 		store: store,
 		cfg:   cfg,
 		sm:    newSessionManager(),
+	}
+	s.sftpCtl = newSFTPController(s)
+	if err := s.applySFTPFromConfig(); err != nil {
+		log.Printf("failed to apply initial SFTP settings: %v", err)
 	}
 
 	mux := http.NewServeMux()
@@ -35,6 +41,8 @@ func NewHandler(store storage.Store, cfg *appconfig.Config) http.Handler {
 	mux.Handle("POST /api/connections", s.auth(http.HandlerFunc(s.handleAddConnection)))
 	mux.Handle("POST /api/connections/switch", s.auth(http.HandlerFunc(s.handleSwitchConnection)))
 	mux.Handle("DELETE /api/connections/", s.auth(http.HandlerFunc(s.handleDeleteConnection)))
+	mux.Handle("GET /api/settings", s.auth(http.HandlerFunc(s.handleGetSettings)))
+	mux.Handle("PUT /api/settings", s.auth(http.HandlerFunc(s.handleUpdateSettings)))
 
 	mux.Handle("/api/drive/list", s.auth(http.HandlerFunc(s.handleDriveList)))
 	mux.Handle("/api/drive/stats", s.auth(http.HandlerFunc(s.handleDriveStats)))

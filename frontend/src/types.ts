@@ -5,6 +5,9 @@ export type User = {
 export type FolderInfo = {
   prefix: string
   name: string
+  size?: number
+  lastModified?: string
+  itemCount?: number
 }
 
 export type FileInfo = {
@@ -49,4 +52,18 @@ export type Connection = {
 export type ConnectionsList = {
   connections: Connection[]
   activeId: string
+}
+
+export type AppSettings = {
+  sftpEnabled: boolean
+  sftpAddr: string
+  sftpUser: string
+  sftpPasswordSet: boolean
+}
+
+export type UpdateAppSettings = {
+  sftpEnabled: boolean
+  sftpAddr: string
+  sftpUser: string
+  sftpPassword?: string
 }

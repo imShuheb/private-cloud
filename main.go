@@ -23,7 +23,7 @@ func main() {
 	ctx := context.Background()
 	var store storage.Store
 	activeConn := cfg.GetActiveConnection()
-	
+
 	if activeConn != nil {
 		s3Store, err := storage.NewS3Store(ctx, storage.S3Config{
 			Bucket:       activeConn.Bucket,
@@ -54,6 +54,13 @@ func main() {
 		log.Println("WARNING: Server started in SETUP MODE. Please visit the dashboard to configure.")
 	} else if activeConn != nil {
 		log.Printf("Active Storage: %s (Bucket: %s)", activeConn.Name, activeConn.Bucket)
+	}
+	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+		log.Printf("HTTPS enabled with cert %s", cfg.TLSCertFile)
+		if err := httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("server error: %v", err)
+		}
+		return
 	}
 
 	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {

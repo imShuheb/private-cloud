@@ -1,14 +1,14 @@
 @import "tailwindcss";
 
 @theme {
-  --font-family: 'Inter', 'Google Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-display: 'Google_Sans', 'Inter', sans-serif;
+  --font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  --font-display: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
   
-  --color-ps-bg: #f8f9fa;
-  --color-ps-primary: #1a73e8;
-  --color-ps-primary-hover: #1765cc;
-  --color-ps-border: #e0e0e0;
-  --color-ps-border-light: #f1f3f4;
+  --color-ps-bg: #ffffff;
+  --color-ps-primary: #000000;
+  --color-ps-primary-hover: #1f1f1f;
+  --color-ps-border: #d4d4d4;
+  --color-ps-border-light: #e5e5e5;
 }
 
 /* ============================================================
@@ -21,7 +21,8 @@ html, body, #root {
 body {
   margin: 0;
   font-family: var(--font-family);
-  background-color: #f8f9fa;
+  background-color: #ffffff;
+  color: #111111;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
