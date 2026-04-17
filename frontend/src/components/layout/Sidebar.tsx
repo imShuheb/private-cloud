@@ -28,20 +28,29 @@ const Sidebar: React.FC<SidebarProps> = ({ onNewClick, filesCount, totalSize, is
 
       <nav className="flex-1 space-y-1">
         {hasConnections && (
-          <Link
-            to="/drive"
-            className={`flex items-center gap-3 px-4 py-2 text-sm font-medium rounded-r-full transition-all ${pathname.startsWith('/drive') ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-100'}`}
-          >
-            <span className="material-symbols-outlined text-lg">folder_open</span>
-            My Drive
-          </Link>
+          <>
+            <Link
+              to="/drive"
+              className={`flex items-center gap-3 px-4 py-2 text-sm font-medium rounded-r-full transition-all ${pathname.startsWith('/drive') ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-100'}`}
+            >
+              <span className="material-symbols-outlined text-lg">folder_open</span>
+              My Drive
+            </Link>
+            <Link
+                to="/health"
+                className={`flex items-center gap-3 px-4 py-2 text-sm font-medium rounded-r-full transition-all ${pathname === '/health' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-100'}`}
+            >
+                <span className="material-symbols-outlined text-lg">query_stats</span>
+                Health
+            </Link>
+          </>
         )}
         <Link
-          to="/connections"
-          className={`flex items-center gap-3 px-4 py-2 text-sm font-medium rounded-r-full transition-all ${pathname === '/connections' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-100'}`}
+          to="/settings"
+          className={`flex items-center gap-3 px-4 py-2 text-sm font-medium rounded-r-full transition-all ${pathname === '/settings' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-100'}`}
         >
-          <span className="material-symbols-outlined text-lg">hub</span>
-          Connections
+          <span className="material-symbols-outlined text-lg">settings</span>
+          Settings
         </Link>
       </nav>
 

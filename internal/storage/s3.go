@@ -338,6 +338,17 @@ func (s *S3Store) Bucket() string {
 	return s.bucket
 }
 
+func (s *S3Store) GetRawObject(ctx context.Context, key string) (io.ReadCloser, error) {
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out.Body, nil
+}
+
 func mapFromSignedHeader(h http.Header) map[string]string {
 	out := make(map[string]string, len(h))
 	for key, values := range h {

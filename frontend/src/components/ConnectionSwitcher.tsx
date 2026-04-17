@@ -48,7 +48,7 @@ export default function ConnectionSwitcher() {
           {activeConn?.name || 'Loading storage...'}
         </span>
         <svg className={`w-4 h-4 text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="19 9l-7 7-7-7" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
       </button>
 
@@ -84,7 +84,7 @@ export default function ConnectionSwitcher() {
                 className="w-full px-3 py-2 text-xs font-medium text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all flex items-center gap-2"
                 onClick={() => {
                   setIsOpen(false)
-                  navigate('/connections')
+                  navigate('/settings')
                 }}
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">

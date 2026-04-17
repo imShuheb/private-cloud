@@ -31,10 +31,11 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.mu.RLock()
-	store := s.store
-	activeConn := s.cfg.GetActiveConnection()
-	s.mu.RUnlock()
+	store, activeConn, err := s.getActiveStore(r.Context())
+	if err != nil {
+		http.Error(w, "storage access failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	if store == nil {
 		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
@@ -74,10 +75,11 @@ func (s *Server) handleDriveList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.mu.RLock()
-	store := s.store
-	activeConn := s.cfg.GetActiveConnection()
-	s.mu.RUnlock()
+	store, activeConn, err := s.getActiveStore(r.Context())
+	if err != nil {
+		http.Error(w, "storage access failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	if store == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -118,9 +120,11 @@ func (s *Server) handleDriveStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.RLock()
-	store := s.store
-	s.mu.RUnlock()
+	store, _, err := s.getActiveStore(r.Context())
+	if err != nil {
+		http.Error(w, "storage access failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	if store == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -175,10 +179,11 @@ func (s *Server) handlePresignUpload(w http.ResponseWriter, r *http.Request) {
 		expires = time.Duration(req.ExpiresIn) * time.Second
 	}
 
-	s.mu.RLock()
-	store := s.store
-	activeConn := s.cfg.GetActiveConnection()
-	s.mu.RUnlock()
+	store, activeConn, err := s.getActiveStore(r.Context())
+	if err != nil {
+		http.Error(w, "storage access failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	if store == nil {
 		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
@@ -223,10 +228,11 @@ func (s *Server) handlePresignDownload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.mu.RLock()
-	store := s.store
-	activeConn := s.cfg.GetActiveConnection()
-	s.mu.RUnlock()
+	store, activeConn, err := s.getActiveStore(r.Context())
+	if err != nil {
+		http.Error(w, "storage access failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	if store == nil {
 		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
@@ -276,10 +282,11 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request, key string
 		contentType = "application/octet-stream"
 	}
 
-	s.mu.RLock()
-	store := s.store
-	activeConn := s.cfg.GetActiveConnection()
-	s.mu.RUnlock()
+	store, activeConn, err := s.getActiveStore(r.Context())
+	if err != nil {
+		http.Error(w, "storage access failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	if store == nil {
 		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
@@ -304,9 +311,11 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request, key string
 }
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, key string) {
-	s.mu.RLock()
-	store := s.store
-	s.mu.RUnlock()
+	store, _, err := s.getActiveStore(r.Context())
+	if err != nil {
+		http.Error(w, "storage access failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	if store == nil {
 		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
@@ -337,10 +346,11 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, key stri
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, key string) {
-	s.mu.RLock()
-	store := s.store
-	activeConn := s.cfg.GetActiveConnection()
-	s.mu.RUnlock()
+	store, activeConn, err := s.getActiveStore(r.Context())
+	if err != nil {
+		http.Error(w, "storage access failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	if store == nil {
 		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
@@ -378,9 +388,11 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.RLock()
-	store := s.store
-	s.mu.RUnlock()
+	store, _, err := s.getActiveStore(r.Context())
+	if err != nil {
+		http.Error(w, "storage access failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	if store == nil {
 		http.Error(w, "storage not configured", http.StatusServiceUnavailable)
@@ -395,4 +407,39 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "successfully deleted items"})
+}
+
+// Job Handlers
+
+func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if l, err := strconv.Atoi(raw); err == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	jobs, err := s.jobRepo.List(r.Context(), limit)
+	if err != nil {
+		http.Error(w, "failed to list jobs: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, jobs)
+}
+
+func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/jobs/")
+	if id == "" {
+		http.Error(w, "id is required", http.StatusBadRequest)
+		return
+	}
+
+	job, err := s.jobRepo.GetByID(r.Context(), id)
+	if err != nil {
+		http.Error(w, "job not found", http.StatusNotFound)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, job)
 }

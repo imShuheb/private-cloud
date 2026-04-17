@@ -8,9 +8,8 @@ import type {
 } from './types'
 
 export async function getConnections(): Promise<ConnectionsList> {
-  const res = await fetch('/api/connections')
-  if (!res.ok) throw new Error('Failed to fetch connections')
-  return res.json()
+  const res = await client.get('/api/connections')
+  return res.data
 }
 
 export async function switchConnection(id: string): Promise<void> {
@@ -23,12 +22,7 @@ export async function switchConnection(id: string): Promise<void> {
 }
 
 export async function addConnection(conn: Connection): Promise<void> {
-  const res = await fetch('/api/connections', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(conn),
-  })
-  if (!res.ok) throw new Error('Failed to add connection')
+  await client.post('/api/connections', conn)
 }
 
 const defaultBase = import.meta.env.VITE_API_BASE ?? ''
@@ -92,4 +86,34 @@ export async function getDriveStats() {
 export async function listAll(prefix = '', limit = 1000) {
   const res = await client.get('/api/objects', { params: { prefix, limit } })
   return res.data.items as any[]
+}
+
+export async function listJobs(limit = 50) {
+  const res = await client.get('/api/jobs', { params: { limit } })
+  return res.data
+}
+
+export async function getJob(id: string) {
+  const res = await client.get(`/api/jobs/${id}`)
+  return res.data
+}
+
+export async function getAnalyticsSnapshot() {
+  const res = await client.get('/api/analytics/snapshot')
+  return res.data
+}
+
+export async function getPricing() {
+  const res = await client.get('/api/analytics/pricing')
+  return res.data
+}
+
+export async function updatePricing(config: any) {
+  const res = await client.post('/api/analytics/pricing', config)
+  return res.data
+}
+
+export async function triggerInventoryScan(manifestKey?: string) {
+  const res = await client.post('/api/analytics/trigger-scan', { manifestKey })
+  return res.data
 }

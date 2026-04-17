@@ -66,4 +66,6 @@ type Store interface {
 	PresignDownload(ctx context.Context, key string, expires time.Duration) (PresignedRequest, error)
 	DeleteObject(ctx context.Context, key string) error
 	DeleteObjects(ctx context.Context, keys []string) error
+	GetRawObject(ctx context.Context, key string) (io.ReadCloser, error)
+	Bucket() string
 }

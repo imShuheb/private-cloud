@@ -43,7 +43,25 @@ While storage is managed via the UI, you can set these environment variables in 
 | `AUTH_USERNAME` | Master Admin Username | `admin` |
 | `AUTH_PASSWORD` | Master Admin Password | `admin@123` |
 | `SERVER_ADDR` | Server bind address | `0.0.0.0:8080` |
+| `DB_HOST` | Database Host | `localhost` |
+| `DB_PORT` | Database Port | `5432` |
+| `DB_USER` | Database User | `postgres` |
+| `DB_PASSWORD` | Database Password | `postgres` |
+| `DB_NAME` | Database Name | `private_storage` |
 | `APP_SECRET` | Secret used for credential encryption | (Auto-generated) |
+| `DATABASE_URL` | Full Postgres connection string | (Derived from above) |
+
+---
+
+## 🛠️ Database & Table Creation
+
+Private Storage uses **PostgreSQL + TimescaleDB**. You do **not** need to create tables manually.
+
+1.  **Requirement**: Ensure you have TimeScaleDB running (the Docker Compose setup includes this automatically).
+2.  **Automatic Migrations**: When you run the Go backend, it automatically checks the `internal/db/migrations/` directory and applies any pending SQL scripts to your database.
+3.  **Bootstrap**: On the first run, the system will automatically create the `users`, `connections`, `jobs`, and `object_usage` tables.
+
+---
 
 ---
 
@@ -59,9 +77,8 @@ Check out the detailed **[Community Roadmap](docs/plan/04_release_schedule.md)**
 
 ---
 
-## 🛠️ Run from Source
-
 ### 1. Backend (Go)
+Ensure your database is running, then start the server. Migrations will run automatically.
 ```bash
 go run main.go
 ```

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type loginRequest struct {
@@ -21,17 +23,18 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	username := strings.TrimSpace(req.Username)
 	password := req.Password
 
-	s.mu.RLock()
-	adminUser := s.cfg.AdminUser
-	adminPass := s.cfg.AdminPass
-	s.mu.RUnlock()
+	if username == "" || password == "" {
+		http.Error(w, "username and password are required", http.StatusBadRequest)
+		return
+	}
 
-	if username != adminUser || password != adminPass {
-		if username == "" || password == "" {
-			http.Error(w, "username and password are required", http.StatusBadRequest)
-			return
-		}
+	user, err := s.userRepo.GetByUsername(r.Context(), username)
+	if err != nil {
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return
+	}
 
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
@@ -56,7 +59,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		"authenticated": true,
 		"expiresAt":     expiresAt,
 		"user": map[string]string{
-			"username": adminUser,
+			"username": user.Username,
 		},
 	})
 }

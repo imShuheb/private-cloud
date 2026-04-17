@@ -29,7 +29,7 @@ export default function ConnectionModal({ isOpen, onClose, onSave, editingConnec
       setForm(editingConnection)
     } else {
       setForm({
-        id: 'conn-' + Date.now(),
+        id: '',
         name: '',
         bucket: '',
         region: 'us-east-1',

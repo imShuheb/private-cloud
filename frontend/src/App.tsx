@@ -4,7 +4,8 @@ import { getMe, getConnections } from './api'
 import type { User } from './types'
 import LoginPage from './pages/LoginPage'
 import DrivePage from './pages/DrivePage'
-import ConnectionsPage from './pages/ConnectionsPage'
+import SettingsPage from './pages/SettingsPage'
+import HealthPage from './pages/HealthPage'
 
 function App() {
   const [checking, setChecking] = useState(true)
@@ -18,7 +19,7 @@ function App() {
         if (me.authenticated && me.user) {
           setUser(me.user)
           const conns = await getConnections()
-          setHasConnections(conns.connections.length > 0)
+          setHasConnections((conns?.connections?.length || 0) > 0)
         }
       } catch (err) {
         console.error('Initial check failed:', err)
@@ -43,7 +44,7 @@ function App() {
   const refreshConnections = async () => {
     try {
       const conns = await getConnections()
-      setHasConnections(conns.connections.length > 0)
+      setHasConnections((conns?.connections?.length || 0) > 0)
     } catch (e) {
       setHasConnections(false)
     }
@@ -60,7 +61,7 @@ function App() {
         <Route
           path="/login"
           element={
-            user ? <Navigate to={hasConnections ? "/drive" : "/connections"} replace /> : <LoginPage onLogin={handleLogin} />
+            user ? <Navigate to={hasConnections ? "/drive" : "/settings"} replace /> : <LoginPage onLogin={handleLogin} />
           }
         />
         <Route
@@ -70,7 +71,7 @@ function App() {
               hasConnections ? (
                 <DrivePage user={user} onLogout={() => setUser(null)} />
               ) : (
-                <Navigate to="/connections" replace />
+                <Navigate to="/settings" replace />
               )
             ) : (
               <Navigate to="/login" replace />
@@ -78,16 +79,30 @@ function App() {
           }
         />
         <Route
-          path="/connections"
+          path="/health"
           element={
             user ? (
-              <ConnectionsPage user={user} onLogout={() => setUser(null)} />
+              hasConnections ? (
+                <HealthPage user={user} onLogout={() => setUser(null)} />
+              ) : (
+                <Navigate to="/settings" replace />
+              )
             ) : (
               <Navigate to="/login" replace />
             )
           }
         />
-        <Route path="*" element={<Navigate to={user ? (hasConnections ? "/drive" : "/connections") : "/login"} replace />} />
+        <Route
+          path="/settings"
+          element={
+            user ? (
+              <SettingsPage user={user} onLogout={() => setUser(null)} onConnectionsChange={refreshConnections} />
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+        <Route path="*" element={<Navigate to={user ? (hasConnections ? "/drive" : "/settings") : "/login"} replace />} />
       </Routes>
     </BrowserRouter>
   )

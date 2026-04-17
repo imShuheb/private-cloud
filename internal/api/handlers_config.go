@@ -3,62 +3,75 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"private-storage/internal/repository"
 	"strings"
-
-	"private-storage/internal/appconfig"
 )
 
 func (s *Server) handleListConnections(w http.ResponseWriter, r *http.Request) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	conns, err := s.connRepo.List(r.Context())
+	if err != nil {
+		http.Error(w, "failed to list connections: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	active, _ := s.connRepo.GetActive(r.Context())
+	activeID := ""
+	if active != nil {
+		activeID = active.ID
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"connections": s.cfg.Connections,
-		"activeId":    s.cfg.ActiveID,
+		"connections": conns,
+		"activeId":    activeID,
 	})
 }
 
 func (s *Server) handleAddConnection(w http.ResponseWriter, r *http.Request) {
-	var conn appconfig.Connection
+	var conn repository.Connection
 	if err := json.NewDecoder(r.Body).Decode(&conn); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
 
-	if conn.ID == "" || conn.Bucket == "" {
-		http.Error(w, "ID and Bucket are required", http.StatusBadRequest)
+	if conn.Name == "" || conn.Bucket == "" {
+		http.Error(w, "Name and Bucket are required", http.StatusBadRequest)
 		return
 	}
 
+	// Test connection before saving
 	_, err := s.initStorage(r.Context(), &conn)
 	if err != nil {
 		http.Error(w, "connection test failed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	found := false
-	for i := range s.cfg.Connections {
-		if s.cfg.Connections[i].ID == conn.ID {
-			s.cfg.Connections[i] = conn
-			found = true
-			break
-		}
-	}
-	if !found {
-		s.cfg.Connections = append(s.cfg.Connections, conn)
+	// New connections might have a dummy ID from the frontend (e.g. "conn-123")
+	// We only Update if the ID looks like a real UUID.
+	if conn.ID != "" && !strings.HasPrefix(conn.ID, "conn-") && len(conn.ID) > 20 {
+		// Update existing
+		err = s.connRepo.Update(r.Context(), &conn)
+	} else {
+		// Create new
+		conn.ID = "" // Ensure we don't try to insert a dummy ID
+		err = s.connRepo.Create(r.Context(), &conn)
 	}
 
-	if s.cfg.ActiveID == "" || s.cfg.ActiveID == conn.ID {
-		s.cfg.ActiveID = conn.ID
-		store, _ := s.initStorage(r.Context(), &conn)
+	if err != nil {
+		http.Error(w, "failed to save connection: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// If it's the only connection, make it active
+	conns, _ := s.connRepo.List(r.Context())
+	if len(conns) == 1 {
+		s.connRepo.SetActive(r.Context(), conns[0].ID)
+		store, _ := s.initStorage(r.Context(), &conns[0])
+		s.mu.Lock()
 		s.store = store
+		s.mu.Unlock()
 	}
 
-	s.cfg.Save()
-	writeJSON(w, http.StatusOK, s.cfg.Connections)
+	writeJSON(w, http.StatusOK, conns)
 }
 
 type switchRequest struct {
@@ -72,18 +85,8 @@ func (s *Server) handleSwitchConnection(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	var target *appconfig.Connection
-	for i := range s.cfg.Connections {
-		if s.cfg.Connections[i].ID == req.ID {
-			target = &s.cfg.Connections[i]
-			break
-		}
-	}
-
-	if target == nil {
+	target, err := s.connRepo.GetByID(r.Context(), req.ID)
+	if err != nil {
 		http.Error(w, "connection not found", http.StatusNotFound)
 		return
 	}
@@ -94,9 +97,14 @@ func (s *Server) handleSwitchConnection(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if err := s.connRepo.SetActive(r.Context(), req.ID); err != nil {
+		http.Error(w, "failed to set active: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.mu.Lock()
 	s.store = store
-	s.cfg.ActiveID = req.ID
-	s.cfg.Save()
+	s.mu.Unlock()
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "switched", "id": req.ID})
 }
@@ -108,22 +116,17 @@ func (s *Server) handleDeleteConnection(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if id == s.cfg.ActiveID {
+	active, _ := s.connRepo.GetActive(r.Context())
+	if active != nil && active.ID == id {
 		http.Error(w, "cannot delete the active connection", http.StatusForbidden)
 		return
 	}
 
-	newConns := []appconfig.Connection{}
-	for _, c := range s.cfg.Connections {
-		if c.ID != id {
-			newConns = append(newConns, c)
-		}
+	if err := s.connRepo.Delete(r.Context(), id); err != nil {
+		http.Error(w, "failed to delete: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
-	s.cfg.Connections = newConns
-	s.cfg.Save()
 
-	writeJSON(w, http.StatusOK, s.cfg.Connections)
+	conns, _ := s.connRepo.List(r.Context())
+	writeJSON(w, http.StatusOK, conns)
 }
