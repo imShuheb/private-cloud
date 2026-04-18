@@ -13,11 +13,13 @@ import (
 )
 
 type Server struct {
-	mu      sync.RWMutex
-	store   storage.Store
-	cfg     *appconfig.Config
-	sm      *sessionManager
-	sftpCtl *sftpController
+	mu                      sync.RWMutex
+	store                   storage.Store
+	cfg                     *appconfig.Config
+	sm                      *sessionManager
+	sftpCtl                 *sftpController
+	migrationMu             sync.Mutex
+	connectionMigrationRuns map[int64]context.CancelFunc
 }
 
 func NewHandler(store storage.Store, cfg *appconfig.Config) http.Handler {
@@ -25,10 +27,14 @@ func NewHandler(store storage.Store, cfg *appconfig.Config) http.Handler {
 		store: store,
 		cfg:   cfg,
 		sm:    newSessionManager(),
+		connectionMigrationRuns: make(map[int64]context.CancelFunc),
 	}
 	s.sftpCtl = newSFTPController(s)
 	if err := s.applySFTPFromConfig(); err != nil {
 		log.Printf("failed to apply initial SFTP settings: %v", err)
+	}
+	if err := s.markStaleRunningConnectionMigrationJobs(); err != nil {
+		log.Printf("failed to mark stale migration jobs: %v", err)
 	}
 
 	mux := http.NewServeMux()
@@ -56,6 +62,11 @@ func NewHandler(store storage.Store, cfg *appconfig.Config) http.Handler {
 	mux.Handle("POST /api/users", s.auth(requireOwner(http.HandlerFunc(s.handleCreateUser))))
 	mux.Handle("PUT /api/users/", s.auth(requireOwner(http.HandlerFunc(s.handleUsersMutations))))
 	mux.Handle("DELETE /api/users/", s.auth(requireOwner(http.HandlerFunc(s.handleDeleteUser))))
+
+	mux.Handle("POST /api/migrations/connections/dry-run", s.auth(requireOwner(http.HandlerFunc(s.handleConnectionMigrationDryRun))))
+	mux.Handle("POST /api/migrations/connections/start", s.auth(requireOwner(http.HandlerFunc(s.handleConnectionMigrationStart))))
+	mux.Handle("GET /api/migrations/connections/", s.auth(requirePerm(permReadFiles, http.HandlerFunc(s.handleConnectionMigrationStatus))))
+	mux.Handle("POST /api/migrations/connections/", s.auth(requireOwner(http.HandlerFunc(s.handleConnectionMigrationActions))))
 
 	distFS := frontend.GetDistFS()
 	fileServer := http.FileServer(http.FS(distFS))

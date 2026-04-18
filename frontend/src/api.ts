@@ -9,7 +9,11 @@ import type {
   ConnectionsList,
   Connection,
   AppSettings,
-  UpdateAppSettings
+  UpdateAppSettings,
+  ConnectionMigrationRequest,
+  ConnectionMigrationDryRun,
+  ConnectionMigrationJob,
+  ConnectionMigrationJobError,
 } from './types'
 
 const defaultBase = import.meta.env.VITE_API_BASE ?? ''
@@ -142,4 +146,30 @@ export async function resetUserPassword(userId: number, password: string): Promi
 
 export async function deleteUser(userId: number): Promise<void> {
   await client.delete(`/api/users/${userId}`)
+}
+
+export async function migrationDryRun(payload: ConnectionMigrationRequest): Promise<ConnectionMigrationDryRun> {
+  const res = await client.post('/api/migrations/connections/dry-run', payload)
+  return res.data?.dryRun as ConnectionMigrationDryRun
+}
+
+export async function migrationStart(payload: ConnectionMigrationRequest): Promise<{ jobId: number }> {
+  const res = await client.post('/api/migrations/connections/start', payload)
+  return { jobId: Number(res.data?.jobId || 0) }
+}
+
+export async function migrationStatus(jobId: number): Promise<{ job: ConnectionMigrationJob; errors: ConnectionMigrationJobError[] }> {
+  const res = await client.get(`/api/migrations/connections/${jobId}`)
+  return {
+    job: res.data?.job as ConnectionMigrationJob,
+    errors: (res.data?.errors ?? []) as ConnectionMigrationJobError[],
+  }
+}
+
+export async function migrationCancel(jobId: number): Promise<void> {
+  await client.post(`/api/migrations/connections/${jobId}/cancel`)
+}
+
+export async function migrationRetryFailed(jobId: number): Promise<void> {
+  await client.post(`/api/migrations/connections/${jobId}/retry-failed`)
 }

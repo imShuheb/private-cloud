@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -152,6 +153,11 @@ func Load() (*Config, error) {
 	}
 
 	if err := ensureSchema(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
+	if err := runSchemaMigrations(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -339,6 +345,16 @@ func (c *Config) VerifyAdminPassword(password string) (bool, bool) {
 
 func ensureSchema(db *sql.DB) error {
 	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version TEXT PRIMARY KEY,
+			checksum TEXT NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+	`); err != nil {
+		return err
+	}
+
+	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS settings (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
@@ -404,6 +420,110 @@ func ensureSchema(db *sql.DB) error {
 		WHERE role='owner' AND is_active=1;
 	`)
 	return err
+}
+
+type schemaMigration struct {
+	version  string
+	checksum string
+	sql      string
+}
+
+func runSchemaMigrations(db *sql.DB) error {
+	migrations := []schemaMigration{
+		{
+			version:  "20260419_001_connection_migration_jobs",
+			checksum: "a6b4f5a1",
+			sql: `
+				CREATE TABLE IF NOT EXISTS connection_migration_jobs (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					created_by_user_id INTEGER NOT NULL,
+					source_connection_id TEXT NOT NULL,
+					destination_connection_id TEXT NOT NULL,
+					prefix_filter TEXT NOT NULL DEFAULT '',
+					mode TEXT NOT NULL CHECK(mode IN ('copy','move')),
+					conflict_policy TEXT NOT NULL CHECK(conflict_policy IN ('skip','overwrite','fail')),
+					status TEXT NOT NULL CHECK(status IN ('pending','running','completed','failed','cancelled')),
+					dry_run_scanned_objects INTEGER NOT NULL DEFAULT 0,
+					dry_run_bytes INTEGER NOT NULL DEFAULT 0,
+					scanned_objects INTEGER NOT NULL DEFAULT 0,
+					migrated_objects INTEGER NOT NULL DEFAULT 0,
+					failed_objects INTEGER NOT NULL DEFAULT 0,
+					bytes_done INTEGER NOT NULL DEFAULT 0,
+					error_summary TEXT NOT NULL DEFAULT '',
+					created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					started_at TEXT,
+					finished_at TEXT,
+					updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+				);
+
+				CREATE TABLE IF NOT EXISTS connection_migration_job_errors (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					job_id INTEGER NOT NULL,
+					object_key TEXT NOT NULL,
+					error_message TEXT NOT NULL,
+					created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					FOREIGN KEY(job_id) REFERENCES connection_migration_jobs(id) ON DELETE CASCADE
+				);
+
+				CREATE INDEX IF NOT EXISTS idx_connection_migration_jobs_status
+				ON connection_migration_jobs(status, updated_at);
+
+				CREATE INDEX IF NOT EXISTS idx_connection_migration_job_errors_job_id
+				ON connection_migration_job_errors(job_id);
+			`,
+		},
+	}
+
+	for _, m := range migrations {
+		applied, err := isMigrationApplied(db, m.version, m.checksum)
+		if err != nil {
+			return err
+		}
+		if applied {
+			continue
+		}
+		if err := applyMigration(db, m); err != nil {
+			return fmt.Errorf("migration %s failed: %w", m.version, err)
+		}
+	}
+
+	return nil
+}
+
+func isMigrationApplied(db *sql.DB, version, checksum string) (bool, error) {
+	var storedChecksum string
+	err := db.QueryRow(`SELECT checksum FROM schema_migrations WHERE version = ?`, version).Scan(&storedChecksum)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	if storedChecksum != checksum {
+		return false, fmt.Errorf("checksum mismatch for migration %s", version)
+	}
+	return true, nil
+}
+
+func applyMigration(db *sql.DB, m schemaMigration) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(m.sql); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO schema_migrations(version, checksum) VALUES (?, ?)`, m.version, m.checksum); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func (c *Config) DB() *sql.DB {
+	return c.db
 }
 
 func loadFromDB(db *sql.DB) (*Config, error) {

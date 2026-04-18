@@ -1,22 +1,26 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
-import { createUser, deleteUser, getDriveStats, getSettings, listUsers, resetUserPassword, updateSettings, updateUserActive, updateUserPermissions } from '../api'
-import type { ManagedUser, User, UserPermissions } from '../types'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { createUser, deleteUser, getConnections, getDriveStats, getSettings, listUsers, resetUserPassword, updateSettings, updateUserActive, updateUserPermissions } from '../api'
+import type { ConnectionsList, ManagedUser, User, UserPermissions } from '../types'
 import Header from '../components/layout/Header'
 import Sidebar from '../components/layout/Sidebar'
 import StatusBar from '../components/drive/StatusBar'
 import PasswordResetModal from '../components/settings/PasswordResetModal'
 import ServerSettingsSection from '../components/settings/ServerSettingsSection'
 import UsersAccessSection from '../components/settings/UsersAccessSection'
+import SettingsSubmenu from '../components/settings/SettingsSubmenu'
+import SettingsConnectionsSection from '../components/settings/SettingsConnectionsSection'
+import SettingsMigrationsSection from '../components/settings/SettingsMigrationsSection'
 
 type Props = {
   user: User
   onLogout: () => void
 }
 
-type TabKey = 'server' | 'users'
+type SettingsSectionKey = 'ssh' | 'users' | 'connections' | 'migrations'
 
 export default function SettingsPage({ user, onLogout }: Props) {
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const canManageConnections = !!user.permissions?.canManageConnections
   const canManageSettings = !!user.permissions?.canManageSettings
@@ -31,6 +35,9 @@ export default function SettingsPage({ user, onLogout }: Props) {
   const [sftpEnabled, setSFTPEnabled] = useState(false)
   const [sftpAddr, setSFTPAddr] = useState('0.0.0.0:2022')
 
+  const [connectionsData, setConnectionsData] = useState<ConnectionsList | null>(null)
+  const [connectionsLoading, setConnectionsLoading] = useState(false)
+
   const [users, setUsers] = useState<ManagedUser[]>([])
   const [usersLoading, setUsersLoading] = useState(false)
   const [creatingUser, setCreatingUser] = useState(false)
@@ -38,36 +45,45 @@ export default function SettingsPage({ user, onLogout }: Props) {
   const [deletingUserId, setDeletingUserId] = useState<number | null>(null)
   const [resetTarget, setResetTarget] = useState<ManagedUser | null>(null)
 
-  const availableTabs = useMemo(() => {
-    const tabs: TabKey[] = []
-    if (canManageSettings) tabs.push('server')
-    if (isOwner) tabs.push('users')
-    return tabs
-  }, [canManageSettings, isOwner])
+  const availableSections = useMemo(() => {
+    const sections: Array<{ key: SettingsSectionKey; label: string; icon: string }> = []
+    if (canManageSettings) sections.push({ key: 'ssh', label: 'SSH Access', icon: 'terminal' })
+    if (canManageConnections) sections.push({ key: 'connections', label: 'Connections', icon: 'hub' })
+    if (canManageConnections) sections.push({ key: 'migrations', label: 'Migrations', icon: 'sync_alt' })
+    if (isOwner) sections.push({ key: 'users', label: 'Users', icon: 'group' })
+    return sections
+  }, [canManageSettings, canManageConnections, isOwner])
 
-  const initialTabParam = (searchParams.get('tab') || '').toLowerCase()
-  const initialTab: TabKey = initialTabParam === 'users' ? 'users' : 'server'
-  const [activeTab, setActiveTab] = useState<TabKey>(initialTab)
+  const initialSectionParam = (searchParams.get('section') || '').toLowerCase()
+  const initialSection: SettingsSectionKey =
+    initialSectionParam === 'users' ||
+    initialSectionParam === 'connections' ||
+    initialSectionParam === 'migrations' ||
+    initialSectionParam === 'ssh'
+      ? (initialSectionParam as SettingsSectionKey)
+      : 'ssh'
 
-  function setActiveTabWithUrl(tab: TabKey) {
-    setActiveTab(tab)
+  const [activeSection, setActiveSection] = useState<SettingsSectionKey>(initialSection)
+
+  function setActiveSectionWithUrl(section: SettingsSectionKey) {
+    setActiveSection(section)
     const next = new URLSearchParams(searchParams)
-    next.set('tab', tab)
+    next.set('section', section)
     setSearchParams(next, { replace: true })
   }
 
   useEffect(() => {
-    if (availableTabs.length > 0 && !availableTabs.includes(activeTab)) {
-      setActiveTabWithUrl(availableTabs[0])
+    if (availableSections.length > 0 && !availableSections.some((s) => s.key === activeSection)) {
+      setActiveSectionWithUrl(availableSections[0].key)
     }
-  }, [availableTabs, activeTab])
+  }, [availableSections, activeSection])
 
   useEffect(() => {
-    const tabParam = (searchParams.get('tab') || '').toLowerCase()
-    if (tabParam === 'server' || tabParam === 'users') {
-      const tab = tabParam as TabKey
-      if (tab !== activeTab) {
-        setActiveTab(tab)
+    const sectionParam = (searchParams.get('section') || '').toLowerCase()
+    if (sectionParam === 'ssh' || sectionParam === 'users' || sectionParam === 'connections' || sectionParam === 'migrations') {
+      const section = sectionParam as SettingsSectionKey
+      if (section !== activeSection) {
+        setActiveSection(section)
       }
     }
   }, [searchParams])
@@ -92,6 +108,16 @@ export default function SettingsPage({ user, onLogout }: Props) {
         const appSettings = await getSettings()
         setSFTPEnabled(appSettings.sftpEnabled)
         setSFTPAddr(appSettings.sftpAddr || '0.0.0.0:2022')
+      }
+
+      if (canManageConnections) {
+        setConnectionsLoading(true)
+        try {
+          const conns = await getConnections()
+          setConnectionsData(conns)
+        } finally {
+          setConnectionsLoading(false)
+        }
       }
 
       setStatus('Settings loaded')
@@ -246,32 +272,19 @@ export default function SettingsPage({ user, onLogout }: Props) {
                 <p className="text-gray-700 text-sm mt-1">Separate controls for server configuration and user access.</p>
               </div>
 
-              {availableTabs.length === 0 ? (
+              {availableSections.length === 0 ? (
                 <div className="p-4 border border-gray-300 bg-gray-50 text-sm text-black">
                   Your account does not have access to settings.
                 </div>
               ) : (
                 <>
-                  <div className="mb-4 flex items-center gap-2 border-b border-gray-200 pb-3">
-                    {canManageSettings && (
-                      <button
-                        onClick={() => setActiveTabWithUrl('server')}
-                        className={`px-3 py-1.5 text-xs font-bold border ${activeTab === 'server' ? 'bg-black text-white border-black' : 'bg-white text-black border-gray-300 hover:border-black'}`}
-                      >
-                        Server Settings
-                      </button>
-                    )}
-                    {isOwner && (
-                      <button
-                        onClick={() => setActiveTabWithUrl('users')}
-                        className={`px-3 py-1.5 text-xs font-bold border ${activeTab === 'users' ? 'bg-black text-white border-black' : 'bg-white text-black border-gray-300 hover:border-black'}`}
-                      >
-                        Users & Access
-                      </button>
-                    )}
-                  </div>
+                  <SettingsSubmenu
+                    items={availableSections}
+                    activeKey={activeSection}
+                    onChange={(k) => setActiveSectionWithUrl(k as SettingsSectionKey)}
+                  />
 
-                  {activeTab === 'server' && canManageSettings && (
+                  {activeSection === 'ssh' && canManageSettings && (
                     <ServerSettingsSection
                       sftpEnabled={sftpEnabled}
                       sftpAddr={sftpAddr}
@@ -282,7 +295,23 @@ export default function SettingsPage({ user, onLogout }: Props) {
                     />
                   )}
 
-                  {activeTab === 'users' && isOwner && (
+                  {activeSection === 'connections' && canManageConnections && (
+                    <SettingsConnectionsSection
+                      data={connectionsData}
+                      loading={connectionsLoading}
+                      onOpenConnections={() => navigate('/connections')}
+                    />
+                  )}
+
+                  {activeSection === 'migrations' && canManageConnections && (
+                    <SettingsMigrationsSection
+                      data={connectionsData}
+                      canManageConnections={canManageConnections}
+                      onStatus={setStatus}
+                    />
+                  )}
+
+                  {activeSection === 'users' && isOwner && (
                     <UsersAccessSection
                       users={users}
                       usersLoading={usersLoading}

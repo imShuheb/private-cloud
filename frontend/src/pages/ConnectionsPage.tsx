@@ -234,7 +234,7 @@ export default function ConnectionsPage({ user, onLogout }: Props) {
                     <div className={`mt-3 flex flex-wrap gap-x-4 gap-y-2 border-t pt-3 ${conn.id === data.activeId ? 'border-gray-600' : 'border-gray-300'}`}>
                       <div className={`flex items-center gap-1.5 text-[11px] sm:text-xs min-w-0 ${conn.id === data.activeId ? 'text-gray-300' : 'text-gray-700'}`}>
                         <span className="material-symbols-outlined text-sm">link</span>
-                        <span className="truncate max-w-[220px] sm:max-w-[340px]">{conn.endpoint || 'AWS Standard'}</span>
+                        <span className="truncate max-w-55 sm:max-w-85">{conn.endpoint || 'AWS Standard'}</span>
                       </div>
                       <div className={`flex items-center gap-1.5 text-[11px] sm:text-xs ${conn.id === data.activeId ? 'text-gray-300' : 'text-gray-700'}`}>
                         <span className="material-symbols-outlined text-sm">enhanced_encryption</span>

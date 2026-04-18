@@ -89,3 +89,47 @@ export type CreateUserPayload = {
   username: string
   password: string
 }
+
+export type ConnectionMigrationMode = 'copy' | 'move'
+export type ConnectionMigrationConflictPolicy = 'skip' | 'overwrite' | 'fail'
+
+export type ConnectionMigrationRequest = {
+  sourceConnectionId: string
+  destinationConnectionId: string
+  prefixFilter: string
+  mode: ConnectionMigrationMode
+  conflictPolicy: ConnectionMigrationConflictPolicy
+}
+
+export type ConnectionMigrationDryRun = {
+  scannedObjects: number
+  bytes: number
+}
+
+export type ConnectionMigrationJob = {
+  id: number
+  createdByUserId: number
+  sourceConnectionId: string
+  destinationConnectionId: string
+  prefixFilter: string
+  mode: ConnectionMigrationMode
+  conflictPolicy: ConnectionMigrationConflictPolicy
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  dryRunScannedObjects: number
+  dryRunBytes: number
+  scannedObjects: number
+  migratedObjects: number
+  failedObjects: number
+  bytesDone: number
+  errorSummary: string
+  createdAt: string
+  startedAt?: string
+  finishedAt?: string
+  updatedAt: string
+}
+
+export type ConnectionMigrationJobError = {
+  objectKey: string
+  errorMessage: string
+  createdAt: string
+}
