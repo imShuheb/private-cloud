@@ -16,6 +16,7 @@ const Header: React.FC<HeaderProps> = ({ user, loading, query, onQueryChange, on
   const { pathname } = useLocation()
   const userInitial = user.username?.charAt(0) || '?'
   const showSearch = pathname.startsWith('/drive')
+  const canManageConnections = !!user.permissions?.canManageConnections
 
   return (
     <header className="flex items-center gap-2 px-3 md:px-4 py-2 bg-white border-b border-gray-200 h-14 shrink-0 z-20">
@@ -39,7 +40,7 @@ const Header: React.FC<HeaderProps> = ({ user, loading, query, onQueryChange, on
       )}
 
       <div className="flex items-center gap-1 md:gap-2 ml-auto min-w-0">
-        <ConnectionSwitcher />
+        {canManageConnections && <ConnectionSwitcher />}
         
         <div className="flex items-center gap-1 border-l border-gray-200 pl-2 md:pl-3">
           <button
@@ -58,7 +59,7 @@ const Header: React.FC<HeaderProps> = ({ user, loading, query, onQueryChange, on
             <span className="material-symbols-outlined text-xl">logout</span>
           </button>
           <div
-            className="w-8 h-8 border border-black bg-black text-white flex items-center justify-center text-sm font-semibold uppercase cursor-pointer ml-1"
+            className="w-8 h-8 md:w-9 md:h-9 border border-black bg-black text-white flex items-center justify-center text-sm font-semibold uppercase cursor-pointer ml-1"
             title={`${user.username}`}
           >
             {userInitial}

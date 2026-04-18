@@ -12,6 +12,7 @@ type FileRowProps = {
   location?: string
   selected?: boolean
   onToggleSelect?: () => void
+  canWrite: boolean
 }
 
 const FileRow: React.FC<FileRowProps> = ({ 
@@ -23,7 +24,8 @@ const FileRow: React.FC<FileRowProps> = ({
   onDelete, 
   location,
   selected,
-  onToggleSelect
+  onToggleSelect,
+  canWrite
 }) => {
   const iconInfo = getFileIcon(isFolder ? 'folder' : (item as FileInfo).name || (item as FileInfo).key)
   const name = isFolder ? (item as FolderInfo).name : ((item as FileInfo).name || (item as FileInfo).key)
@@ -42,22 +44,24 @@ const FileRow: React.FC<FileRowProps> = ({
       className={`flex items-center gap-3 md:gap-4 px-4 py-3 border-b border-gray-100 transition-colors group cursor-default select-none ${selected ? 'bg-black text-white' : 'hover:bg-gray-50'}`}
       onClick={() => {
         if (isFolder) onClick()
-        else onToggleSelect?.()
+        else if (canWrite) onToggleSelect?.()
       }}
       tabIndex={0}
       role="button"
-      onKeyDown={(e) => e.key === 'Enter' && (isFolder ? onClick() : onToggleSelect?.())}
+      onKeyDown={(e) => e.key === 'Enter' && (isFolder ? onClick() : (canWrite ? onToggleSelect?.() : undefined))}
     >
       <div 
         className="w-8 shrink-0 flex items-center justify-center"
         onClick={(e) => e.stopPropagation()}
       >
-        <input 
-          type="checkbox" 
-          className="w-4 h-4 border-gray-400 text-black cursor-pointer"
-          checked={!!selected}
-          onChange={onToggleSelect}
-        />
+        {canWrite ? (
+          <input 
+            type="checkbox" 
+            className="w-4 h-4 border-gray-400 text-black cursor-pointer"
+            checked={!!selected}
+            onChange={onToggleSelect}
+          />
+        ) : null}
       </div>
       <div className="flex-1 flex items-center gap-4 min-w-0">
         <span className={`material-symbols-outlined text-2xl shrink-0 ${selected ? 'text-white' : isFolder ? 'filled text-black' : iconInfo.className}`}>
@@ -101,13 +105,15 @@ const FileRow: React.FC<FileRowProps> = ({
             <span className="material-symbols-outlined !text-xl">download</span>
           </button>
         )}
-        <button
-          className={`w-8 h-8 flex items-center justify-center border transition-all ${selected ? 'text-white border-white' : 'text-black border-gray-300 hover:border-black'}`}
-          title="Delete"
-          onClick={(e) => { e.stopPropagation(); onDelete(item) }}
-        >
-          <span className="material-symbols-outlined !text-xl">delete</span>
-        </button>
+        {canWrite ? (
+          <button
+            className={`w-8 h-8 flex items-center justify-center border transition-all ${selected ? 'text-white border-white' : 'text-black border-gray-300 hover:border-black'}`}
+            title="Delete"
+            onClick={(e) => { e.stopPropagation(); onDelete(item) }}
+          >
+            <span className="material-symbols-outlined !text-xl">delete</span>
+          </button>
+        ) : null}
       </div>
     </div>
   )

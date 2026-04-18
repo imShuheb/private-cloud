@@ -1,8 +1,9 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
-	"log"
+	"errors"
 	"net/http"
 	"strings"
 )
@@ -21,28 +22,29 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	username := strings.TrimSpace(req.Username)
 	password := req.Password
-
-	s.mu.Lock()
-	adminUser := s.cfg.AdminUser
-	validPassword, upgraded := s.cfg.VerifyAdminPassword(password)
-	if upgraded {
-		if err := s.cfg.Save(); err != nil {
-			log.Printf("failed to persist upgraded password hash: %v", err)
-		}
+	if username == "" || password == "" {
+		http.Error(w, "username and password are required", http.StatusBadRequest)
+		return
 	}
-	s.mu.Unlock()
 
-	if username != adminUser || !validPassword {
-		if username == "" || password == "" {
-			http.Error(w, "username and password are required", http.StatusBadRequest)
+	s.mu.RLock()
+	user, validPassword, err := s.cfg.VerifyUserPassword(username, password)
+	s.mu.RUnlock()
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
 		}
+		http.Error(w, "failed to verify credentials", http.StatusInternalServerError)
+		return
+	}
 
+	if !validPassword || user == nil {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
-	sessionID, expiresAt, err := s.sm.create(username)
+	sessionID, expiresAt, err := s.sm.create(user.ID, user.Username, user.Role, user.Permissions)
 	if err != nil {
 		http.Error(w, "failed to create session", http.StatusInternalServerError)
 		return
@@ -61,8 +63,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"authenticated": true,
 		"expiresAt":     expiresAt,
-		"user": map[string]string{
-			"username": adminUser,
+		"user": map[string]any{
+			"id":          user.ID,
+			"username":    user.Username,
+			"role":        user.Role,
+			"permissions": user.Permissions,
 		},
 	})
 }
@@ -101,8 +106,11 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"authenticated": true,
-		"user": map[string]string{
+		"user": map[string]any{
+			"id":       session.userID,
 			"username": session.username,
+			"role":     session.role,
+			"permissions": session.perms,
 		},
 	})
 }

@@ -8,10 +8,8 @@ import (
 )
 
 type updateSettingsRequest struct {
-	SFTPEnabled  bool   `json:"sftpEnabled"`
-	SFTPAddr     string `json:"sftpAddr"`
-	SFTPUser     string `json:"sftpUser"`
-	SFTPPassword string `json:"sftpPassword"`
+	SFTPEnabled bool   `json:"sftpEnabled"`
+	SFTPAddr    string `json:"sftpAddr"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
@@ -19,10 +17,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 	defer s.mu.RUnlock()
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"sftpEnabled":     s.cfg.SFTPEnabled,
-		"sftpAddr":        s.cfg.SFTPAddr,
-		"sftpUser":        s.cfg.SFTPUser,
-		"sftpPasswordSet": strings.TrimSpace(s.cfg.SFTPPassword) != "",
+		"sftpEnabled": s.cfg.SFTPEnabled,
+		"sftpAddr":    s.cfg.SFTPAddr,
 	})
 }
 
@@ -46,17 +42,8 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	settings := s.cfg.GetRuntimeSettings()
 	settings.SFTPEnabled = req.SFTPEnabled
 	settings.SFTPAddr = addr
-	settings.SFTPUser = req.SFTPUser
-	if strings.TrimSpace(req.SFTPPassword) != "" {
-		settings.SFTPPassword = req.SFTPPassword
-	}
-	if settings.SFTPEnabled {
-		if strings.TrimSpace(settings.SFTPUser) == "" || strings.TrimSpace(settings.SFTPPassword) == "" {
-			s.mu.Unlock()
-			http.Error(w, "SFTP username and password are required when SFTP is enabled", http.StatusBadRequest)
-			return
-		}
-	}
+	settings.SFTPUser = ""
+	settings.SFTPPassword = ""
 	s.cfg.SetRuntimeSettings(settings)
 
 	if err := s.cfg.Save(); err != nil {
@@ -72,10 +59,8 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"saved":           true,
-		"sftpEnabled":     settings.SFTPEnabled,
-		"sftpAddr":        settings.SFTPAddr,
-		"sftpUser":        settings.SFTPUser,
-		"sftpPasswordSet": strings.TrimSpace(settings.SFTPPassword) != "",
+		"saved":       true,
+		"sftpEnabled": settings.SFTPEnabled,
+		"sftpAddr":    settings.SFTPAddr,
 	})
 }

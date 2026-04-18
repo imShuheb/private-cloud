@@ -12,6 +12,7 @@ type FileListProps = {
   isSearching: boolean
   selectedKeys: Set<string>
   onSelectionChange: (keys: Set<string>) => void
+  canWrite: boolean
 }
 
 const FileList: React.FC<FileListProps> = ({
@@ -23,7 +24,8 @@ const FileList: React.FC<FileListProps> = ({
   onDelete,
   isSearching,
   selectedKeys,
-  onSelectionChange
+  onSelectionChange,
+  canWrite
 }) => {
   const isEmpty = folders.length === 0 && files.length === 0
 
@@ -75,12 +77,14 @@ const FileList: React.FC<FileListProps> = ({
         {/* Column headers */}
         <div className="flex items-center gap-4 px-4 py-3 text-[11px] font-bold text-black uppercase tracking-widest border-b border-gray-200 bg-white sticky top-0 ">
           <div className="w-8 shrink-0 flex items-center justify-center">
-            <input
-              type="checkbox"
-              className="w-4 h-4 border-gray-400 text-black cursor-pointer"
-              checked={isAllSelected}
-              onChange={toggleAll}
-            />
+            {canWrite ? (
+              <input
+                type="checkbox"
+                className="w-4 h-4 border-gray-400 text-black cursor-pointer"
+                checked={isAllSelected}
+                onChange={toggleAll}
+              />
+            ) : null}
           </div>
           <span className="flex-1">Name</span>
           {isSearching && <span className="w-48 shrink-0 text-left px-2">Location</span>}
@@ -104,6 +108,7 @@ const FileList: React.FC<FileListProps> = ({
                   location={isSearching ? (f as any).location : undefined}
                   selected={selectedKeys.has(f.prefix)}
                   onToggleSelect={() => toggleOne(f.prefix)}
+                  canWrite={canWrite}
                 />
               ))}
             </div>
@@ -127,6 +132,7 @@ const FileList: React.FC<FileListProps> = ({
                   location={f.location}
                   selected={selectedKeys.has(f.key)}
                   onToggleSelect={() => toggleOne(f.key)}
+                  canWrite={canWrite}
                 />
               ))}
             </div>

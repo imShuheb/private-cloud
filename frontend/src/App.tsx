@@ -1,9 +1,10 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { useEffect, useState } from 'react'
-import { getMe, getConnections } from './api'
+import { getMe, getConnections, getDriveStats } from './api'
 import type { User } from './types'
 import LoginPage from './pages/LoginPage'
 import DrivePage from './pages/DrivePage'
+import SettingsPage from './pages/SettingsPage'
 import ConnectionsPage from './pages/ConnectionsPage'
 
 const APP_TITLE = 'Private Storage'
@@ -32,8 +33,13 @@ function App() {
         const me = await getMe()
         if (me.authenticated && me.user) {
           setUser(me.user)
-          const conns = await getConnections()
-          setHasConnections(conns.connections.length > 0)
+          if (me.user.permissions?.canManageConnections) {
+            const conns = await getConnections()
+            setHasConnections(conns.connections.length > 0)
+          } else {
+            const stats = await getDriveStats()
+            setHasConnections(stats.isConfigured)
+          }
         }
       } catch (err) {
         console.error('Initial check failed:', err)
@@ -57,8 +63,13 @@ function App() {
 
   const refreshConnections = async () => {
     try {
-      const conns = await getConnections()
-      setHasConnections(conns.connections.length > 0)
+      if (user?.permissions?.canManageConnections) {
+        const conns = await getConnections()
+        setHasConnections(conns.connections.length > 0)
+      } else {
+        const stats = await getDriveStats()
+        setHasConnections(stats.isConfigured)
+      }
     } catch (e) {
       setHasConnections(false)
     }
@@ -69,13 +80,21 @@ function App() {
     refreshConnections()
   }
 
+  const homePath = user
+    ? user.permissions?.canManageConnections
+      ? '/connections'
+      : user.permissions?.canManageSettings || user.role === 'owner'
+        ? '/settings'
+        : '/drive'
+    : '/login'
+
   return (
     <BrowserRouter>
       <Routes>
         <Route
           path="/login"
           element={
-            user ? <Navigate to={hasConnections ? "/drive" : "/connections"} replace /> : <LoginPage onLogin={handleLogin} />
+            user ? <Navigate to={homePath} replace /> : <LoginPage onLogin={handleLogin} />
           }
         />
         <Route
@@ -96,13 +115,31 @@ function App() {
           path="/connections"
           element={
             user ? (
-              <ConnectionsPage user={user} onLogout={() => setUser(null)} />
+              user.permissions?.canManageConnections ? (
+                <ConnectionsPage user={user} onLogout={() => setUser(null)} />
+              ) : (
+                <Navigate to={homePath} replace />
+              )
             ) : (
               <Navigate to="/login" replace />
             )
           }
         />
-        <Route path="*" element={<Navigate to={user ? (hasConnections ? "/drive" : "/connections") : "/login"} replace />} />
+        <Route
+          path="/settings"
+          element={
+            user ? (
+              user.permissions?.canManageSettings || user.role === 'owner' ? (
+                <SettingsPage user={user} onLogout={() => setUser(null)} />
+              ) : (
+                <Navigate to={homePath} replace />
+              )
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+        <Route path="*" element={<Navigate to={homePath} replace />} />
       </Routes>
     </BrowserRouter>
   )

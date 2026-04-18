@@ -31,7 +31,13 @@ export default function LoginPage({ onLogin }: Props) {
       localStorage.setItem('ps_username', username.trim())
       const user = await login(username.trim(), password)
       onLogin(user)
-      navigate('/drive')
+      if (user.permissions?.canManageConnections) {
+        navigate('/connections')
+      } else if (user.permissions?.canManageSettings || user.role === 'owner') {
+        navigate('/settings')
+      } else {
+        navigate('/drive')
+      }
     } catch (err: any) {
       setError(err?.response?.data?.error || err?.message || 'Login failed')
     } finally {

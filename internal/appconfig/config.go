@@ -28,6 +28,29 @@ type Connection struct {
 	UsePathStyle bool   `json:"usePathStyle"`
 }
 
+const (
+	RoleOwner = "owner"
+	RoleUser  = "user"
+)
+
+type UserPermissions struct {
+	CanReadFiles         bool `json:"canReadFiles"`
+	CanWriteFiles        bool `json:"canWriteFiles"`
+	CanManageConnections bool `json:"canManageConnections"`
+	CanManageSettings    bool `json:"canManageSettings"`
+	CanUseSFTP           bool `json:"canUseSftp"`
+}
+
+type User struct {
+	ID          int64           `json:"id"`
+	Username    string          `json:"username"`
+	Role        string          `json:"role"`
+	IsActive    bool            `json:"isActive"`
+	CreatedAt   string          `json:"createdAt"`
+	UpdatedAt   string          `json:"updatedAt"`
+	Permissions UserPermissions `json:"permissions"`
+}
+
 type Config struct {
 	ServerAddr        string       `json:"serverAddr"`
 	AdminUser         string       `json:"adminUser"`
@@ -52,6 +75,9 @@ const encPrefix = "enc:"
 
 // masterKey should ideally be from an env var
 var masterKey = []byte("private-storage-32-byte-key-0123")
+
+var ErrLastOwner = errors.New("cannot deactivate the last owner")
+var ErrUserNotFound = errors.New("user not found")
 
 func init() {
 	if k := os.Getenv("APP_SECRET"); len(k) >= 16 {
@@ -152,6 +178,11 @@ func Load() (*Config, error) {
 	}
 
 	cfg.AdminAPIKey = strings.TrimSpace(os.Getenv("ADMIN_API_KEY"))
+
+	if err := cfg.ensureOwnerUser(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return cfg, nil
 }
 
@@ -328,6 +359,50 @@ func ensureSchema(db *sql.DB) error {
 			use_path_style INTEGER NOT NULL DEFAULT 0
 		);
 	`)
+	if err != nil {
+		return err
+	}
+
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS users (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT NOT NULL UNIQUE,
+			password_hash TEXT NOT NULL,
+			role TEXT NOT NULL CHECK(role IN ('owner','user')),
+			is_active INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+	`); err != nil {
+		return err
+	}
+
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS user_permissions (
+			user_id INTEGER PRIMARY KEY,
+			can_read_files INTEGER NOT NULL DEFAULT 1,
+			can_write_files INTEGER NOT NULL DEFAULT 1,
+			can_manage_connections INTEGER NOT NULL DEFAULT 0,
+			can_manage_settings INTEGER NOT NULL DEFAULT 0,
+			can_use_sftp INTEGER NOT NULL DEFAULT 1,
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+		);
+	`); err != nil {
+		return err
+	}
+
+	if _, err := db.Exec(`ALTER TABLE user_permissions ADD COLUMN can_use_sftp INTEGER NOT NULL DEFAULT 1`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			return err
+		}
+	}
+
+	_, err = db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_users_single_active_owner
+		ON users(role)
+		WHERE role='owner' AND is_active=1;
+	`)
 	return err
 }
 
@@ -498,4 +573,422 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func defaultPermissionsByRole(role string) UserPermissions {
+	if role == RoleOwner {
+		return UserPermissions{
+			CanReadFiles:         true,
+			CanWriteFiles:        true,
+			CanManageConnections: true,
+			CanManageSettings:    true,
+			CanUseSFTP:           true,
+		}
+	}
+
+	return UserPermissions{
+		CanReadFiles:         true,
+		CanWriteFiles:        true,
+		CanManageConnections: false,
+		CanManageSettings:    false,
+		CanUseSFTP:           true,
+	}
+}
+
+func (c *Config) ensureOwnerUser() error {
+	if c.db == nil {
+		return errors.New("config database is not initialized")
+	}
+
+	ownerUsername := strings.TrimSpace(c.AdminUser)
+	ownerHash := strings.TrimSpace(c.AdminPasswordHash)
+	if ownerUsername == "" || ownerHash == "" {
+		return nil
+	}
+
+	var existingOwnerID int64
+	var existingOwnerUsername string
+	err := c.db.QueryRow(`
+		SELECT id, username
+		FROM users
+		WHERE role = ? AND is_active = 1
+		LIMIT 1
+	`, RoleOwner).Scan(&existingOwnerID, &existingOwnerUsername)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
+	if err == nil && strings.EqualFold(existingOwnerUsername, ownerUsername) {
+		if _, err := c.db.Exec(`
+			UPDATE users
+			SET password_hash = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE id = ?
+		`, ownerHash, existingOwnerID); err != nil {
+			return err
+		}
+		return c.UpsertUserPermissions(existingOwnerID, defaultPermissionsByRole(RoleOwner))
+	}
+
+	if err == nil && !strings.EqualFold(existingOwnerUsername, ownerUsername) {
+		return nil
+	}
+
+	user, err := c.GetUserByUsername(ownerUsername)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
+	if errors.Is(err, sql.ErrNoRows) {
+		created, err := c.CreateUser(ownerUsername, ownerHash, RoleOwner, true)
+		if err != nil {
+			return err
+		}
+		return c.UpsertUserPermissions(created.ID, defaultPermissionsByRole(RoleOwner))
+	}
+
+	if _, err := c.db.Exec(`
+		UPDATE users
+		SET role = ?, is_active = 1, password_hash = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, RoleOwner, ownerHash, user.ID); err != nil {
+		return err
+	}
+
+	return c.UpsertUserPermissions(user.ID, defaultPermissionsByRole(RoleOwner))
+}
+
+func (c *Config) CreateUser(username, passwordHash, role string, isActive bool) (*User, error) {
+	if c.db == nil {
+		return nil, errors.New("config database is not initialized")
+	}
+
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return nil, errors.New("username is required")
+	}
+	if role != RoleOwner && role != RoleUser {
+		return nil, errors.New("invalid role")
+	}
+	if strings.TrimSpace(passwordHash) == "" {
+		return nil, errors.New("password hash is required")
+	}
+
+	res, err := c.db.Exec(`
+		INSERT INTO users(username, password_hash, role, is_active)
+		VALUES (?, ?, ?, ?)
+	`, username, passwordHash, role, boolToInt(isActive))
+	if err != nil {
+		return nil, err
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := c.UpsertUserPermissions(id, defaultPermissionsByRole(role)); err != nil {
+		return nil, err
+	}
+
+	return c.GetUserByID(id)
+}
+
+func (c *Config) CreateLocalUser(username, password string) (*User, error) {
+	hash, err := hashSecret(password)
+	if err != nil {
+		return nil, err
+	}
+
+	role := RoleUser
+	var ownerCount int
+	if err := c.db.QueryRow(`SELECT COUNT(*) FROM users WHERE role = ? AND is_active = 1`, RoleOwner).Scan(&ownerCount); err != nil {
+		return nil, err
+	}
+	if ownerCount == 0 {
+		role = RoleOwner
+	}
+
+	return c.CreateUser(username, hash, role, true)
+}
+
+func (c *Config) GetUserByID(id int64) (*User, error) {
+	if c.db == nil {
+		return nil, errors.New("config database is not initialized")
+	}
+
+	var u User
+	var isActive int
+	err := c.db.QueryRow(`
+		SELECT id, username, role, is_active, created_at, updated_at
+		FROM users
+		WHERE id = ?
+	`, id).Scan(&u.ID, &u.Username, &u.Role, &isActive, &u.CreatedAt, &u.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	u.IsActive = isActive == 1
+
+	perms, err := c.GetUserPermissions(u.ID)
+	if err != nil {
+		return nil, err
+	}
+	u.Permissions = perms
+	return &u, nil
+}
+
+func (c *Config) GetUserByUsername(username string) (*User, error) {
+	if c.db == nil {
+		return nil, errors.New("config database is not initialized")
+	}
+
+	username = strings.TrimSpace(username)
+	var u User
+	var isActive int
+	err := c.db.QueryRow(`
+		SELECT id, username, role, is_active, created_at, updated_at
+		FROM users
+		WHERE username = ?
+	`, username).Scan(&u.ID, &u.Username, &u.Role, &isActive, &u.CreatedAt, &u.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	u.IsActive = isActive == 1
+
+	perms, err := c.GetUserPermissions(u.ID)
+	if err != nil {
+		return nil, err
+	}
+	u.Permissions = perms
+	return &u, nil
+}
+
+func (c *Config) GetUserPasswordHashByUsername(username string) (string, error) {
+	if c.db == nil {
+		return "", errors.New("config database is not initialized")
+	}
+	username = strings.TrimSpace(username)
+	var hash string
+	err := c.db.QueryRow(`SELECT password_hash FROM users WHERE username = ?`, username).Scan(&hash)
+	if err != nil {
+		return "", err
+	}
+	return hash, nil
+}
+
+func (c *Config) VerifyUserPassword(username, password string) (*User, bool, error) {
+	u, err := c.GetUserByUsername(strings.TrimSpace(username))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if !u.IsActive {
+		return nil, false, nil
+	}
+
+	hash, err := c.GetUserPasswordHashByUsername(u.Username)
+	if err != nil {
+		return nil, false, err
+	}
+
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
+		return nil, false, nil
+	}
+
+	return u, true, nil
+}
+
+func (c *Config) ListUsers() ([]User, error) {
+	if c.db == nil {
+		return nil, errors.New("config database is not initialized")
+	}
+
+	rows, err := c.db.Query(`
+		SELECT id, username, role, is_active, created_at, updated_at
+		FROM users
+		ORDER BY username ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	users := make([]User, 0)
+	for rows.Next() {
+		var u User
+		var isActive int
+		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &isActive, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, err
+		}
+		u.IsActive = isActive == 1
+		perms, err := c.GetUserPermissions(u.ID)
+		if err != nil {
+			return nil, err
+		}
+		u.Permissions = perms
+		users = append(users, u)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return users, nil
+}
+
+func (c *Config) GetUserPermissions(userID int64) (UserPermissions, error) {
+	if c.db == nil {
+		return UserPermissions{}, errors.New("config database is not initialized")
+	}
+
+	var p UserPermissions
+	var readFiles, writeFiles, manageConnections, manageSettings, useSFTP int
+	err := c.db.QueryRow(`
+		SELECT can_read_files, can_write_files, can_manage_connections, can_manage_settings, can_use_sftp
+		FROM user_permissions
+		WHERE user_id = ?
+	`, userID).Scan(&readFiles, &writeFiles, &manageConnections, &manageSettings, &useSFTP)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return UserPermissions{}, nil
+		}
+		return UserPermissions{}, err
+	}
+
+	p.CanReadFiles = readFiles == 1
+	p.CanWriteFiles = writeFiles == 1
+	p.CanManageConnections = manageConnections == 1
+	p.CanManageSettings = manageSettings == 1
+	p.CanUseSFTP = useSFTP == 1
+	return p, nil
+}
+
+func (c *Config) UpsertUserPermissions(userID int64, perms UserPermissions) error {
+	if c.db == nil {
+		return errors.New("config database is not initialized")
+	}
+
+	_, err := c.db.Exec(`
+		INSERT INTO user_permissions (
+			user_id,
+			can_read_files,
+			can_write_files,
+			can_manage_connections,
+			can_manage_settings,
+			can_use_sftp,
+			updated_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(user_id) DO UPDATE SET
+			can_read_files=excluded.can_read_files,
+			can_write_files=excluded.can_write_files,
+			can_manage_connections=excluded.can_manage_connections,
+			can_manage_settings=excluded.can_manage_settings,
+			can_use_sftp=excluded.can_use_sftp,
+			updated_at=CURRENT_TIMESTAMP
+	`,
+		userID,
+		boolToInt(perms.CanReadFiles),
+		boolToInt(perms.CanWriteFiles),
+		boolToInt(perms.CanManageConnections),
+		boolToInt(perms.CanManageSettings),
+		boolToInt(perms.CanUseSFTP),
+	)
+	return err
+}
+
+func (c *Config) SetUserActive(userID int64, active bool) error {
+	if c.db == nil {
+		return errors.New("config database is not initialized")
+	}
+
+	if !active {
+		var role string
+		err := c.db.QueryRow(`SELECT role FROM users WHERE id = ?`, userID).Scan(&role)
+		if err != nil {
+			return err
+		}
+
+		if role == RoleOwner {
+			var ownerCount int
+			if err := c.db.QueryRow(`SELECT COUNT(*) FROM users WHERE role = ? AND is_active = 1`, RoleOwner).Scan(&ownerCount); err != nil {
+				return err
+			}
+			if ownerCount <= 1 {
+				return ErrLastOwner
+			}
+		}
+	}
+
+	_, err := c.db.Exec(`
+		UPDATE users
+		SET is_active = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, boolToInt(active), userID)
+	return err
+}
+
+func (c *Config) SetUserPassword(userID int64, password string) error {
+	if c.db == nil {
+		return errors.New("config database is not initialized")
+	}
+
+	password = strings.TrimSpace(password)
+	if password == "" {
+		return errors.New("password is required")
+	}
+
+	hash, err := hashSecret(password)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.db.Exec(`
+		UPDATE users
+		SET password_hash = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, hash, userID)
+	return err
+}
+
+func (c *Config) DeleteUser(userID int64) error {
+	if c.db == nil {
+		return errors.New("config database is not initialized")
+	}
+
+	var role string
+	var isActive int
+	err := c.db.QueryRow(`SELECT role, is_active FROM users WHERE id = ?`, userID).Scan(&role, &isActive)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrUserNotFound
+		}
+		return err
+	}
+
+	if role == RoleOwner && isActive == 1 {
+		var ownerCount int
+		if err := c.db.QueryRow(`SELECT COUNT(*) FROM users WHERE role = ? AND is_active = 1`, RoleOwner).Scan(&ownerCount); err != nil {
+			return err
+		}
+		if ownerCount <= 1 {
+			return ErrLastOwner
+		}
+	}
+
+	res, err := c.db.Exec(`DELETE FROM users WHERE id = ?`, userID)
+	if err != nil {
+		return err
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
 }

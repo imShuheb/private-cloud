@@ -1,19 +1,49 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"log"
 	"net/http"
 	"net/url"
+	"private-storage/internal/appconfig"
 	"strings"
 	"time"
 )
 
+type permissionKey string
+
+const (
+	permReadFiles         permissionKey = "can_read_files"
+	permWriteFiles        permissionKey = "can_write_files"
+	permManageConnections permissionKey = "can_manage_connections"
+	permManageSettings    permissionKey = "can_manage_settings"
+)
+
+type principal struct {
+	userID    int64
+	username  string
+	role      string
+	perms     appconfig.UserPermissions
+	viaAPIKey bool
+}
+
+type principalContextKey struct{}
+
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if cookie, err := r.Cookie(sessionCookieName); err == nil && s.sm.isValid(cookie.Value) {
-			next.ServeHTTP(w, r)
-			return
+		if cookie, err := r.Cookie(sessionCookieName); err == nil {
+			session, ok := s.sm.get(cookie.Value)
+			if ok {
+				p := principal{
+					userID:   session.userID,
+					username: session.username,
+					role:     session.role,
+					perms:    session.perms,
+				}
+				next.ServeHTTP(w, withPrincipal(r, p))
+				return
+			}
 		}
 
 		bearer := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
@@ -27,6 +57,75 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+
+		ownerPerms := appconfig.UserPermissions{
+			CanReadFiles:         true,
+			CanWriteFiles:        true,
+			CanManageConnections: true,
+			CanManageSettings:    true,
+		}
+		p := principal{
+			userID:    0,
+			username:  "api-key",
+			role:      appconfig.RoleOwner,
+			perms:     ownerPerms,
+			viaAPIKey: true,
+		}
+		next.ServeHTTP(w, withPrincipal(r, p))
+	})
+}
+
+func withPrincipal(r *http.Request, p principal) *http.Request {
+	ctx := context.WithValue(r.Context(), principalContextKey{}, p)
+	return r.WithContext(ctx)
+}
+
+func principalFromRequest(r *http.Request) (principal, bool) {
+	v := r.Context().Value(principalContextKey{})
+	p, ok := v.(principal)
+	return p, ok
+}
+
+func requireOwner(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := principalFromRequest(r)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if p.role != appconfig.RoleOwner {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func requirePerm(perm permissionKey, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := principalFromRequest(r)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		allowed := false
+		switch perm {
+		case permReadFiles:
+			allowed = p.perms.CanReadFiles
+		case permWriteFiles:
+			allowed = p.perms.CanWriteFiles
+		case permManageConnections:
+			allowed = p.perms.CanManageConnections
+		case permManageSettings:
+			allowed = p.perms.CanManageSettings
+		}
+
+		if !allowed {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+
 		next.ServeHTTP(w, r)
 	})
 }

@@ -3,6 +3,9 @@ import type {
   DriveListResponse,
   PresignedRequest,
   User,
+  ManagedUser,
+  UserPermissions,
+  CreateUserPayload,
   ConnectionsList,
   Connection,
   AppSettings,
@@ -108,9 +111,35 @@ export async function updateSettings(payload: UpdateAppSettings): Promise<AppSet
   const body = {
     sftpEnabled: payload.sftpEnabled,
     sftpAddr: payload.sftpAddr,
-    sftpUser: payload.sftpUser,
-    sftpPassword: payload.sftpPassword ?? '',
   }
   const res = await client.put('/api/settings', body)
   return res.data as AppSettings
+}
+
+export async function listUsers(): Promise<ManagedUser[]> {
+  const res = await client.get('/api/users')
+  return (res.data?.users ?? []) as ManagedUser[]
+}
+
+export async function createUser(payload: CreateUserPayload): Promise<ManagedUser> {
+  const res = await client.post('/api/users', payload)
+  return res.data.user as ManagedUser
+}
+
+export async function updateUserPermissions(userId: number, permissions: UserPermissions): Promise<ManagedUser> {
+  const res = await client.put(`/api/users/${userId}/permissions`, permissions)
+  return res.data.user as ManagedUser
+}
+
+export async function updateUserActive(userId: number, isActive: boolean): Promise<ManagedUser> {
+  const res = await client.put(`/api/users/${userId}/active`, { isActive })
+  return res.data.user as ManagedUser
+}
+
+export async function resetUserPassword(userId: number, password: string): Promise<void> {
+  await client.put(`/api/users/${userId}/password`, { password })
+}
+
+export async function deleteUser(userId: number): Promise<void> {
+  await client.delete(`/api/users/${userId}`)
 }

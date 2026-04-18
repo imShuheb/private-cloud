@@ -8,6 +8,7 @@ export default function ConnectionSwitcher() {
   const [data, setData] = useState<ConnectionsList | null>(null)
   const [loading, setLoading] = useState(false)
   const [isOpen, setIsOpen] = useState(false)
+  const [error, setError] = useState('')
 
   useEffect(() => {
     load()
@@ -25,11 +26,12 @@ export default function ConnectionSwitcher() {
   async function handleSwitch(id: string) {
     if (id === data?.activeId) return
     setLoading(true)
+    setError('')
     try {
       await switchConnection(id)
       window.location.reload() // Fastest way to refresh all data for new store
     } catch (err) {
-      alert('Failed to switch storage: ' + err)
+      setError('Failed to switch storage')
     } finally {
       setLoading(false)
     }
@@ -59,6 +61,11 @@ export default function ConnectionSwitcher() {
             <div className="px-4 py-2 text-[10px] font-bold text-gray-500 uppercase tracking-widest">
               Switch Connection
             </div>
+            {error && (
+              <div className="mx-2 mb-2 px-2 py-1 text-[11px] font-semibold text-black bg-gray-100 border border-gray-300">
+                {error}
+              </div>
+            )}
             {data?.connections?.map((conn) => (
               <button
                 key={conn.id}

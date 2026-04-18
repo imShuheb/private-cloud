@@ -9,9 +9,21 @@ type SidebarProps = {
   totalSize: number
   isConfigured: boolean
   connectionsLoading?: boolean
+  disableNew?: boolean
+  canSeeConnections?: boolean
+  canSeeSettings?: boolean
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ onNewClick, filesCount, totalSize, isConfigured, connectionsLoading = false }) => {
+const Sidebar: React.FC<SidebarProps> = ({
+  onNewClick,
+  filesCount,
+  totalSize,
+  isConfigured,
+  connectionsLoading = false,
+  disableNew = false,
+  canSeeConnections = true,
+  canSeeSettings = false,
+}) => {
   const { pathname } = useLocation()
 
   const hasConnections = isConfigured
@@ -21,7 +33,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onNewClick, filesCount, totalSize, is
       <button
         className="flex items-center justify-center md:justify-start gap-2 px-2 md:px-4 py-2.5 border border-gray-300 bg-white text-sm font-medium text-black transition-all mb-4 md:mb-6 w-full disabled:opacity-50 hover:border-black"
         onClick={onNewClick}
-        disabled={!hasConnections && pathname !== '/connections'}
+        disabled={disableNew || (!hasConnections && pathname !== '/connections')}
       >
         <span className="material-symbols-outlined text-2xl text-black">add</span>
         <span className="text-black hidden md:inline">New</span>
@@ -40,13 +52,24 @@ const Sidebar: React.FC<SidebarProps> = ({ onNewClick, filesCount, totalSize, is
             <span className="hidden md:inline">My Drive</span>
           </Link>
         )}
-        <Link
-          to="/connections"
-          className={`flex items-center justify-center md:justify-start gap-2 px-2 md:px-3 py-2 text-sm font-medium transition-all border ${pathname === '/connections' ? 'bg-black text-white border-black' : 'text-black border-transparent hover:border-gray-300 hover:bg-gray-50'}`}
-        >
-          <span className="material-symbols-outlined text-lg">hub</span>
-          <span className="hidden md:inline">Connections</span>
-        </Link>
+        {canSeeConnections && (
+          <Link
+            to="/connections"
+            className={`flex items-center justify-center md:justify-start gap-2 px-2 md:px-3 py-2 text-sm font-medium transition-all border ${pathname === '/connections' ? 'bg-black text-white border-black' : 'text-black border-transparent hover:border-gray-300 hover:bg-gray-50'}`}
+          >
+            <span className="material-symbols-outlined text-lg">hub</span>
+            <span className="hidden md:inline">Connections</span>
+          </Link>
+        )}
+        {canSeeSettings && (
+          <Link
+            to="/settings"
+            className={`flex items-center justify-center md:justify-start gap-2 px-2 md:px-3 py-2 text-sm font-medium transition-all border ${pathname === '/settings' ? 'bg-black text-white border-black' : 'text-black border-transparent hover:border-gray-300 hover:bg-gray-50'}`}
+          >
+            <span className="material-symbols-outlined text-lg">settings</span>
+            <span className="hidden md:inline">Settings</span>
+          </Link>
+        )}
       </nav>
 
       <div className="hidden md:block px-2 mt-4 pt-4 border-t border-gray-200">

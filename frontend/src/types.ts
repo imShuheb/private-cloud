@@ -1,5 +1,26 @@
 export type User = {
+  id?: number
   username: string
+  role?: 'owner' | 'user'
+  permissions?: UserPermissions
+}
+
+export type UserPermissions = {
+  canReadFiles: boolean
+  canWriteFiles: boolean
+  canManageConnections: boolean
+  canManageSettings: boolean
+  canUseSftp: boolean
+}
+
+export type ManagedUser = {
+  id: number
+  username: string
+  role: 'owner' | 'user'
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+  permissions: UserPermissions
 }
 
 export type FolderInfo = {
@@ -57,13 +78,14 @@ export type ConnectionsList = {
 export type AppSettings = {
   sftpEnabled: boolean
   sftpAddr: string
-  sftpUser: string
-  sftpPasswordSet: boolean
 }
 
 export type UpdateAppSettings = {
   sftpEnabled: boolean
   sftpAddr: string
-  sftpUser: string
-  sftpPassword?: string
+}
+
+export type CreateUserPayload = {
+  username: string
+  password: string
 }

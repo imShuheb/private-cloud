@@ -2,25 +2,16 @@
 
 A secure, modern S3-compatible cloud storage explorer. Manage multiple cloud storage accounts with ease using a high-performance Go backend and a responsive React interface.
 
-<p align="center">
-  <img src="docs/assets/login.png" width="72%" alt="Login Screen" />
-</p>
-<p align="center">
-  <img src="docs/assets/drive.png" width="72%" alt="Drive Interface" />
-</p>
-<p align="center">
-   <img src="docs/assets/connection.png" width="72%" alt="Connections and Settings" />
-</p>
-
 ## ✨ Highlights
-- **Multi-Tenant Ready**: Add and manage multiple S3 storage profiles (AWS, MinIO, R2, Wasabi).
+- **Multi-Connection Ready**: Add and manage multiple S3 storage profiles (AWS, MinIO, R2, Wasabi).
 - **SQLite Persistence**: Admin identity + connections are persisted in SQLite (`config/private-storage.db`).
 - **Encryption at Rest**: S3 Access/Secret keys are AES-GCM encrypted before being written to SQLite.
 - **Hardened Auth**: Admin password is stored as a bcrypt hash (not plaintext).
+- **Owner + User Access Model**: Owner can create users and manage per-user permissions.
 - **Dynamic Switching**: Swap between active buckets instantly via the dashboard.
 - **Preview + Direct Download**: Preview opens in a new tab, while Download triggers a real file download.
 - **Built-in SFTP Bridge**: SFTP uses the same active web connection for consistent file access.
-- **Web Settings Panel**: Enable/disable and configure SFTP directly from Connections page.
+- **Settings Page**: Manage server settings and users access from a dedicated settings area.
 - **Optional HTTPS**: Native TLS support via cert/key environment variables.
 - **Modern Stack**: Built with Go 1.22+, React 18+, and Tailwind CSS.
 - **Security First**: Presigned URL support for secure uploads/downloads.
@@ -117,8 +108,8 @@ If you want local source files and full project control:
 2. **Login & Setup**:
    - Access the dashboard at `http://localhost:8080`.
    - Login with default credentials: `admin` / `admin@123`.
-   - Go to the **Connections Manager** to add your first storage bucket.
-   - Optional: configure SFTP in **Connections -> Server Settings**.
+   - Go to **Connections** to add your first storage bucket.
+   - Optional: configure SFTP in **Settings -> Server Settings**.
 
 3. **Optional SFTP Access**:
    - Connect your phone/file manager to `<host>:2022`.
@@ -139,8 +130,6 @@ While storage is managed via the UI, you can set these environment variables in 
 | `CONFIG_DB_PATH` | SQLite file path for app state | `config/private-storage.db` |
 | `SFTP_ENABLED` | Enable built-in SFTP server bound to active web connection | `false` |
 | `SFTP_ADDR` | SFTP bind address | `0.0.0.0:2022` |
-| `SFTP_USER` | SFTP username | empty |
-| `SFTP_PASSWORD` | SFTP password | empty |
 | `TLS_CERT_FILE` | Path to TLS cert PEM (enables HTTPS when set with key) | empty |
 | `TLS_KEY_FILE` | Path to TLS private key PEM | empty |
 | `APP_SECRET` | Secret used for credential encryption | (Auto-generated) |
@@ -177,11 +166,14 @@ All storage credentials added through the dashboard are stored in SQLite (`confi
 ### Samsung / Phone Access
 Built-in SFTP is available now. When enabled, SFTP always uses the same active connection selected in the web UI, so list/upload/download stay in sync.
 
+Authentication uses app users. Access is controlled by each user's permissions (including SFTP access).
+
 Quick setup:
 
 1. Set `SFTP_ENABLED=true`
-2. Set `SFTP_USER` and `SFTP_PASSWORD`
-3. Start app and connect phone file manager to `<host>:2022` over SFTP
+2. Create/manage users in **Settings -> Users & Access**
+3. Enable `Allow SFTP login` for users who need SFTP access
+4. Start app and connect phone file manager to `<host>:2022` over SFTP
 
 ### File Access Behavior (Web)
 - **Preview**: opens the file in a new browser tab.
@@ -190,6 +182,15 @@ Quick setup:
 ---
 ## 📄 License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+## 🤝 Contributing
+
+Contributions are welcome.
+
+- Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Discussion post draft for inviting contributors: [docs/help-wanted-discussion.md](docs/help-wanted-discussion.md)
+- Public roadmap: [ROADMAP.md](ROADMAP.md)
 
 ---
 Made with ❤️ for private storage.

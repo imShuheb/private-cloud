@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/subtle"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -18,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"private-storage/internal/appconfig"
 	"private-storage/internal/storage"
 
 	"github.com/pkg/sftp"
@@ -32,10 +32,8 @@ type sftpController struct {
 }
 
 type sftpRuntimeConfig struct {
-	enabled  bool
-	addr     string
-	user     string
-	password string
+	enabled bool
+	addr    string
 }
 
 func newSFTPController(server *Server) *sftpController {
@@ -52,10 +50,8 @@ func (s *Server) applySFTPFromConfig() error {
 	}
 
 	return s.sftpCtl.apply(sftpRuntimeConfig{
-		enabled:  runtime.SFTPEnabled,
-		addr:     runtime.SFTPAddr,
-		user:     runtime.SFTPUser,
-		password: runtime.SFTPPassword,
+		enabled: runtime.SFTPEnabled,
+		addr:    runtime.SFTPAddr,
 	})
 }
 
@@ -72,9 +68,6 @@ func (c *sftpController) apply(cfg sftpRuntimeConfig) error {
 		c.config = cfg
 		return nil
 	}
-	if strings.TrimSpace(cfg.user) == "" || cfg.password == "" {
-		return errors.New("SFTP requires username and password")
-	}
 	if strings.TrimSpace(cfg.addr) == "" {
 		cfg.addr = "0.0.0.0:2022"
 	}
@@ -86,13 +79,36 @@ func (c *sftpController) apply(cfg sftpRuntimeConfig) error {
 
 	sshConfig := &ssh.ServerConfig{
 		PasswordCallback: func(meta ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
-			if meta.User() != cfg.user {
+			username := strings.TrimSpace(meta.User())
+			if username == "" {
 				return nil, errors.New("unauthorized")
 			}
-			if len(cfg.password) != len(pass) || subtle.ConstantTimeCompare([]byte(cfg.password), pass) != 1 {
+
+			c.server.mu.RLock()
+			user, ok, err := c.server.cfg.VerifyUserPassword(username, string(pass))
+			c.server.mu.RUnlock()
+			if err != nil || !ok || user == nil {
 				return nil, errors.New("unauthorized")
 			}
-			return nil, nil
+
+			if !user.Permissions.CanReadFiles {
+				return nil, errors.New("unauthorized")
+			}
+
+			if !user.Permissions.CanUseSFTP {
+				return nil, errors.New("unauthorized")
+			}
+
+			ext := map[string]string{
+				"username":               user.Username,
+				"role":                   user.Role,
+				"can_read_files":         boolToExt(user.Permissions.CanReadFiles),
+				"can_write_files":        boolToExt(user.Permissions.CanWriteFiles),
+				"can_manage_connections": boolToExt(user.Permissions.CanManageConnections),
+				"can_manage_settings":    boolToExt(user.Permissions.CanManageSettings),
+				"can_use_sftp":          boolToExt(user.Permissions.CanUseSFTP),
+			}
+			return &ssh.Permissions{Extensions: ext}, nil
 		},
 	}
 	sshConfig.AddHostKey(signer)
@@ -104,8 +120,7 @@ func (c *sftpController) apply(cfg sftpRuntimeConfig) error {
 
 	c.ln = ln
 	c.config = cfg
-	log.Printf("SFTP server started on %s (active web connection is shared)", cfg.addr)
-	bridge := &sftpBridge{server: c.server}
+	log.Printf("SFTP server started on %s (auth uses app users)", cfg.addr)
 
 	go func(localLn net.Listener, localSSH *ssh.ServerConfig) {
 		for {
@@ -117,11 +132,63 @@ func (c *sftpController) apply(cfg sftpRuntimeConfig) error {
 				log.Printf("SFTP accept error: %v", err)
 				continue
 			}
-			go bridge.handleConn(conn, localSSH)
+			go c.handleConn(conn, localSSH)
 		}
 	}(ln, sshConfig)
 
 	return nil
+}
+
+func boolToExt(v bool) string {
+	if v {
+		return "1"
+	}
+	return "0"
+}
+
+func extToBool(v string) bool {
+	return strings.TrimSpace(v) == "1"
+}
+
+func (c *sftpController) handleConn(conn net.Conn, sshConfig *ssh.ServerConfig) {
+	defer conn.Close()
+
+	serverConn, chans, reqs, err := ssh.NewServerConn(conn, sshConfig)
+	if err != nil {
+		return
+	}
+	defer serverConn.Close()
+	go ssh.DiscardRequests(reqs)
+
+	bridge := &sftpBridge{server: c.server}
+	if serverConn.Permissions != nil {
+		ext := serverConn.Permissions.Extensions
+		bridge.user = appconfig.User{
+			Username: strings.TrimSpace(ext["username"]),
+			Role:     strings.TrimSpace(ext["role"]),
+			Permissions: appconfig.UserPermissions{
+				CanReadFiles:         extToBool(ext["can_read_files"]),
+				CanWriteFiles:        extToBool(ext["can_write_files"]),
+				CanManageConnections: extToBool(ext["can_manage_connections"]),
+				CanManageSettings:    extToBool(ext["can_manage_settings"]),
+				CanUseSFTP:           extToBool(ext["can_use_sftp"]),
+			},
+		}
+	}
+
+	for newChannel := range chans {
+		if newChannel.ChannelType() != "session" {
+			_ = newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
+			continue
+		}
+
+		channel, requests, err := newChannel.Accept()
+		if err != nil {
+			continue
+		}
+
+		go bridge.handleSessionChannel(channel, requests)
+	}
 }
 
 func (c *sftpController) stopLocked() error {
@@ -156,30 +223,7 @@ func generateHostSigner() (ssh.Signer, error) {
 
 type sftpBridge struct {
 	server *Server
-}
-
-func (b *sftpBridge) handleConn(conn net.Conn, sshConfig *ssh.ServerConfig) {
-	defer conn.Close()
-
-	_, chans, reqs, err := ssh.NewServerConn(conn, sshConfig)
-	if err != nil {
-		return
-	}
-	go ssh.DiscardRequests(reqs)
-
-	for newChannel := range chans {
-		if newChannel.ChannelType() != "session" {
-			_ = newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
-			continue
-		}
-
-		channel, requests, err := newChannel.Accept()
-		if err != nil {
-			continue
-		}
-
-		go b.handleSessionChannel(channel, requests)
-	}
+	user   appconfig.User
 }
 
 func (b *sftpBridge) handleSessionChannel(channel ssh.Channel, requests <-chan *ssh.Request) {
@@ -219,6 +263,10 @@ func parseSubsystem(payload []byte) string {
 }
 
 func (b *sftpBridge) Fileread(r *sftp.Request) (io.ReaderAt, error) {
+	if !b.user.Permissions.CanReadFiles {
+		return nil, os.ErrPermission
+	}
+
 	store, err := b.currentStore()
 	if err != nil {
 		return nil, err
@@ -243,6 +291,10 @@ func (b *sftpBridge) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 }
 
 func (b *sftpBridge) Filewrite(r *sftp.Request) (io.WriterAt, error) {
+	if !b.user.Permissions.CanWriteFiles {
+		return nil, os.ErrPermission
+	}
+
 	store, err := b.currentStore()
 	if err != nil {
 		return nil, err
@@ -267,6 +319,10 @@ func (b *sftpBridge) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 }
 
 func (b *sftpBridge) Filecmd(r *sftp.Request) error {
+	if !b.user.Permissions.CanWriteFiles {
+		return os.ErrPermission
+	}
+
 	store, err := b.currentStore()
 	if err != nil {
 		return err
@@ -298,6 +354,10 @@ func (b *sftpBridge) Filecmd(r *sftp.Request) error {
 }
 
 func (b *sftpBridge) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
+	if !b.user.Permissions.CanReadFiles {
+		return nil, os.ErrPermission
+	}
+
 	store, err := b.currentStore()
 	if err != nil {
 		return nil, err

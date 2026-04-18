@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"sync"
 	"time"
+
+	"private-storage/internal/appconfig"
 )
 
 const sessionCookieName = "ps_session"
@@ -12,7 +14,10 @@ const sessionCookieName = "ps_session"
 var sessionTTL = 24 * time.Hour
 
 type session struct {
+	userID    int64
 	username  string
+	role      string
+	perms     appconfig.UserPermissions
 	expiresAt time.Time
 }
 
@@ -25,7 +30,7 @@ func newSessionManager() *sessionManager {
 	return &sessionManager{sessions: make(map[string]session)}
 }
 
-func (m *sessionManager) create(username string) (string, time.Time, error) {
+func (m *sessionManager) create(userID int64, username, role string, perms appconfig.UserPermissions) (string, time.Time, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		return "", time.Time{}, err
@@ -35,7 +40,7 @@ func (m *sessionManager) create(username string) (string, time.Time, error) {
 	expiresAt := time.Now().Add(sessionTTL)
 
 	m.mu.Lock()
-	m.sessions[id] = session{username: username, expiresAt: expiresAt}
+	m.sessions[id] = session{userID: userID, username: username, role: role, perms: perms, expiresAt: expiresAt}
 	m.mu.Unlock()
 
 	return id, expiresAt, nil

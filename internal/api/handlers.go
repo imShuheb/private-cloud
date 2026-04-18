@@ -258,12 +258,30 @@ func (s *Server) handleObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	p, ok := principalFromRequest(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodPut:
+		if !p.perms.CanWriteFiles {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		s.handleUpload(w, r, key)
 	case http.MethodGet:
+		if !p.perms.CanReadFiles {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		s.handleDownload(w, r, key)
 	case http.MethodDelete:
+		if !p.perms.CanWriteFiles {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		s.handleDelete(w, r, key)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

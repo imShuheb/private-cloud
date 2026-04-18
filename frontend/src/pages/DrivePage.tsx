@@ -59,6 +59,8 @@ export default function DrivePage({ user, onLogout }: Props) {
 
   const segments = useMemo(() => pathSegments(prefix), [prefix])
   const isSearching = !!(query.trim() && searchResults)
+  const canReadFiles = !!user.permissions?.canReadFiles
+  const canWriteFiles = !!user.permissions?.canWriteFiles
 
   const folders = useMemo(() => {
     let list: any[] = []
@@ -127,6 +129,10 @@ export default function DrivePage({ user, onLogout }: Props) {
   }, [navigate])
 
   async function handleUpload(files: FileList | null) {
+    if (!canWriteFiles) {
+      setStatus('You do not have permission to upload files')
+      return
+    }
     if (!files || files.length === 0) return
 
     setLoading(true)
@@ -196,6 +202,10 @@ export default function DrivePage({ user, onLogout }: Props) {
   }
 
   async function handleCreateFolder() {
+    if (!canWriteFiles) {
+      setStatus('You do not have permission to create folders')
+      return
+    }
     const folderName = newFolder.trim().replaceAll('\\', '/').replace(/^\/+|\/+$/g, '')
     if (!folderName) {
       setStatus('Folder name is required')
@@ -224,6 +234,10 @@ export default function DrivePage({ user, onLogout }: Props) {
   }
 
   async function handleBulkDelete() {
+    if (!canWriteFiles) {
+      setStatus('You do not have permission to delete files')
+      return
+    }
     if (selectedKeys.size === 0) return
 
     setConfirmState({
@@ -273,6 +287,10 @@ export default function DrivePage({ user, onLogout }: Props) {
   }
 
   async function handleDelete(item: any) {
+    if (!canWriteFiles) {
+      setStatus('You do not have permission to delete files')
+      return
+    }
     const isFolder = !!item.prefix
     const name = isFolder ? item.name : (item.name || item.key)
     const key = isFolder ? item.prefix : item.key
@@ -307,11 +325,24 @@ export default function DrivePage({ user, onLogout }: Props) {
   }
 
   useEffect(() => {
+    if (!canReadFiles) {
+      setData({
+        currentPrefix: '',
+        parentPrefix: '',
+        folders: [],
+        files: [],
+        isTruncated: false,
+      })
+      setStatsLoaded(true)
+      setStatus('Your account does not have read access to files')
+      return
+    }
     load(prefix)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prefix])
+  }, [prefix, canReadFiles])
 
   useEffect(() => {
+    if (!canReadFiles) return
     const q = query.trim()
     if (!q) {
       setSearchResults(null)
@@ -346,16 +377,21 @@ export default function DrivePage({ user, onLogout }: Props) {
 
       <div className="flex-1 flex overflow-hidden min-h-0">
         <Sidebar
-          onNewClick={() => setShowNewMenu(!showNewMenu)}
+          onNewClick={() => {
+            if (canWriteFiles) setShowNewMenu(!showNewMenu)
+          }}
           filesCount={stats.totalFiles}
           foldersCount={stats.totalFolders}
           totalSize={stats.totalSize}
           isConfigured={stats.isConfigured}
           connectionsLoading={!statsLoaded}
+          disableNew={!canWriteFiles}
+          canSeeConnections={!!user.permissions?.canManageConnections}
+          canSeeSettings={!!user.permissions?.canManageSettings || user.role === 'owner'}
         />
 
         <NewMenu
-          isOpen={showNewMenu}
+          isOpen={showNewMenu && canWriteFiles}
           onClose={() => setShowNewMenu(false)}
           newFolder={newFolder}
           onNewFolderChange={setNewFolder}
@@ -379,8 +415,8 @@ export default function DrivePage({ user, onLogout }: Props) {
             onLoad={navigateTo}
             parentPrefix={parentPrefix}
             loading={loading}
-            selectedCount={selectedKeys.size}
-            onBulkDelete={handleBulkDelete}
+            selectedCount={canWriteFiles ? selectedKeys.size : 0}
+            onBulkDelete={canWriteFiles ? handleBulkDelete : undefined}
           />
 
           <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto">
@@ -419,6 +455,7 @@ export default function DrivePage({ user, onLogout }: Props) {
                 isSearching={isSearching}
                 selectedKeys={selectedKeys}
                 onSelectionChange={setSelectedKeys}
+                canWrite={canWriteFiles}
               />
             )}
           </div>
