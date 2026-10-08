@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bucket-wide search (`GET /api/drive/search`).
 - New Google Drive-style interface: app shell with navigation and storage meter, list and grid views, multi-select, drag & drop and folder uploads, upload panel with per-file cancel, snackbars, and a mobile layout.
 - `GET /api/connections/active` so every user sees which storage is active.
+- In-app file viewer: images, SVG, video, audio, PDF and text/code files open in a full-screen preview with previous/next and keyboard navigation, even when the object is stored as `application/octet-stream`; other types show a Download button instead of downloading on their own.
+- Drive filters (Type, Modified, Clear filters), a select-all checkbox, "Select all N", Delete/Backspace to delete the selection, and always-visible checkboxes on touch screens.
+- Storage insights: select files in the largest-files list and delete them together, with the space freed shown.
+- Redesigned sign-in page with show/hide password and a Caps Lock warning.
+- Phones: back-arrow breadcrumb, size and date under each name, a floating New button and a bottom-sheet New menu.
 
 ### Changed
 - `GET /api/drive/stats` serves totals from the latest scan instead of listing the whole bucket on every request.

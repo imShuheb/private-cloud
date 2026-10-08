@@ -12,7 +12,7 @@ A secure, modern S3-compatible cloud storage explorer. Manage multiple cloud sto
 - **Hardened Auth**: Admin password is stored as a bcrypt hash (not plaintext).
 - **Owner + User Access Model**: Owner can create users and manage per-user permissions.
 - **Dynamic Switching**: Swap between active buckets instantly via the dashboard.
-- **Preview + Direct Download**: Preview opens in a new tab, while Download triggers a real file download.
+- **In-app Preview**: Images, SVG, video, audio, PDF and text/code files open in a full-screen viewer; Download saves the file.
 - **Built-in SFTP Bridge**: SFTP uses the same active web connection for consistent file access.
 - **Settings Page**: Manage server settings and users access from a dedicated settings area.
 - **Optional HTTPS**: Native TLS support via cert/key environment variables.
@@ -179,7 +179,7 @@ Quick setup:
 4. Start app and connect phone file manager to `<host>:2022` over SFTP
 
 ### File Access Behavior (Web)
-- **Preview**: opens the file in a new browser tab.
+- **Preview**: opens supported files (images, SVG, video, audio, PDF, text up to 1 MB) in the in-app viewer. PDFs, SVGs and text are fetched by the browser, which also needs the bucket's CORS rule.
 - **Download**: triggers an actual attachment download.
 - Uploads and downloads go **directly between the browser and the bucket** with presigned URLs, so the bucket needs a CORS rule allowing `GET`/`PUT` from the app's origin and exposing `ETag`.
 

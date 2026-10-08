@@ -146,3 +146,73 @@ export const categoryOrder: Category[] = ['video', 'image', 'audio', 'document',
 export function cx(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(' ')
 }
+
+const categoryByExt: Record<string, Category> = {}
+const categoryGroups: Array<[Category, string[]]> = [
+  ['image', ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico', 'heic', 'heif', 'tif', 'tiff', 'raw', 'avif']],
+  ['video', ['mp4', 'mkv', 'avi', 'mov', 'webm', 'm4v', 'wmv', 'flv', 'ts', 'm2ts', 'mpg', 'mpeg', '3gp']],
+  ['audio', ['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac', 'opus', 'wma', 'aiff']],
+  ['document', ['pdf', 'doc', 'docx', 'txt', 'rtf', 'md', 'odt', 'xls', 'xlsx', 'csv', 'ods', 'ppt', 'pptx', 'odp', 'pages', 'numbers', 'key', 'epub']],
+  ['archive', ['zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2', 'xz', 'zst', 'iso', 'dmg']],
+  ['code', ['js', 'jsx', 'tsx', 'py', 'go', 'rs', 'java', 'kt', 'c', 'h', 'cpp', 'cs', 'rb', 'php', 'json', 'xml', 'html', 'css', 'sql', 'yaml', 'yml', 'toml', 'sh']],
+]
+for (const [category, exts] of categoryGroups) for (const ext of exts) categoryByExt[ext] = category
+
+/** Same grouping as the server's analytics (internal/analytics), by file extension. */
+export function fileCategory(name: string): Category {
+  const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : ''
+  return categoryByExt[ext] ?? 'other'
+}
+
+export type ModifiedRange = '' | 'today' | '7d' | '30d' | 'year' | 'older'
+
+export const modifiedRanges: Array<{ value: Exclude<ModifiedRange, ''>; label: string }> = [
+  { value: 'today', label: 'Today' },
+  { value: '7d', label: 'Last 7 days' },
+  { value: '30d', label: 'Last 30 days' },
+  { value: 'year', label: 'This year' },
+  { value: 'older', label: 'Before this year' },
+]
+
+export function inModifiedRange(iso: string, range: ModifiedRange, now = new Date()): boolean {
+  if (!range) return true
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return false
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const startOfYear = new Date(now.getFullYear(), 0, 1).getTime()
+  const t = d.getTime()
+  switch (range) {
+    case 'today':
+      return t >= startOfToday
+    case '7d':
+      return t >= startOfToday - 6 * 86_400_000
+    case '30d':
+      return t >= startOfToday - 29 * 86_400_000
+    case 'year':
+      return t >= startOfYear
+    case 'older':
+      return t < startOfYear
+  }
+}
+
+export type PreviewKind = 'image' | 'svg' | 'video' | 'audio' | 'pdf' | 'text' | 'none'
+
+const previewByExt: Record<string, PreviewKind> = {}
+const previewGroups: Array<[PreviewKind, string[]]> = [
+  ['image', ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'ico', 'avif']],
+  ['svg', ['svg']],
+  ['video', ['mp4', 'webm', 'm4v', 'mov', 'ogv']],
+  ['audio', ['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opus']],
+  ['pdf', ['pdf']],
+  [
+    'text',
+    ['txt', 'md', 'markdown', 'csv', 'tsv', 'log', 'json', 'xml', 'yaml', 'yml', 'toml', 'ini', 'env', 'js', 'jsx', 'ts', 'tsx', 'go', 'py', 'rb', 'rs', 'java', 'kt', 'c', 'h', 'cpp', 'cs', 'php', 'css', 'scss', 'html', 'sh', 'sql', 'conf'],
+  ],
+]
+for (const [kind, exts] of previewGroups) for (const ext of exts) previewByExt[ext] = kind
+
+/** What the in-app viewer can show for a file name (by extension). */
+export function previewKind(name: string): PreviewKind {
+  const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : ''
+  return previewByExt[ext] ?? 'none'
+}

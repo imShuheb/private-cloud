@@ -24,3 +24,9 @@ export function menuItems(item: DriveItem, actions: ItemActions): MenuItem[] {
   if (actions.onDelete) items.push('divider', { label: 'Delete', icon: 'delete', danger: true, onSelect: () => actions.onDelete!(item) })
   return items
 }
+
+/** Grid template shared by the list header and rows. */
+export const listColumns = (showLocation: boolean) =>
+  showLocation
+    ? 'grid-cols-[minmax(0,1fr)_40px] md:grid-cols-[minmax(0,1fr)_220px_130px_100px_40px]'
+    : 'grid-cols-[minmax(0,1fr)_40px] md:grid-cols-[minmax(0,1fr)_130px_100px_40px]'

@@ -72,6 +72,12 @@ h3,
   outline-offset: 2px;
 }
 
+/* Text fields show focus with their own border, so skip the extra outline */
+input:not([type='checkbox']):not([type='radio']):focus-visible,
+textarea:focus-visible {
+  outline: none;
+}
+
 /* In a layer so Tailwind utilities (text-[32px], text-primary, …) can override them */
 @layer components {
   /* Material Symbols */
@@ -126,6 +132,12 @@ h3,
 @keyframes indeterminate {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(250%); }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
 }
 
 @keyframes shimmer {

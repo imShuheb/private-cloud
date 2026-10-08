@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 import { useLocation, useNavigate } from 'react-router-dom'
 import { createFolder, deleteObjects, errorMessage, isAbortError, presignDownload, searchDrive } from '../api'
 import FileList from '../components/drive/FileList'
+import FilterBar from '../components/drive/FilterBar'
+import { hasFilters, matchesFilters, noFilters, type DriveFilters } from '../components/drive/filters'
 import NewMenu from '../components/drive/NewMenu'
 import StatusBar from '../components/drive/StatusBar'
 import Toolbar, { type ViewMode } from '../components/drive/Toolbar'
 import UploadTray from '../components/drive/UploadTray'
+import FilePreview, { type PreviewFile } from '../components/preview/FilePreview'
 import AppShell from '../components/layout/AppShell'
 import Button from '../components/ui/Button'
 import ConfirmDialog from '../components/ui/ConfirmDialog'
@@ -42,7 +45,8 @@ export default function DrivePage() {
   const user = useUser()
   const perms = permissionsOf(user)
   const navigate = useNavigate()
-  const { pathname } = useLocation()
+  const location = useLocation()
+  const { pathname } = location
   const toast = useToast()
 
   // /drive/a/b → "a/b/"
@@ -58,7 +62,12 @@ export default function DrivePage() {
   const debouncedQuery = useDebouncedValue(query.trim(), 350)
   const [search, setSearch] = useState<SearchState>({ status: 'idle', items: [], truncated: false })
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [newOpen, setNewOpen] = useState(false)
+  const [filters, setFilters] = useState<DriveFilters>(noFilters)
+  // "New" pressed on another page lands here with the menu open
+  const [newOpen, setNewOpen] = useState(() => !!(location.state as { openNew?: boolean } | null)?.openNew)
+  useEffect(() => {
+    if ((location.state as { openNew?: boolean } | null)?.openNew) navigate(location.pathname, { replace: true, state: null })
+  }, [location.state, location.pathname, navigate])
   const [pendingDelete, setPendingDelete] = useState<DriveItem[] | null>(null)
   const [dragging, setDragging] = useState(false)
   const dragDepth = useRef(0)
@@ -83,7 +92,12 @@ export default function DrivePage() {
   // A new folder or search starts with nothing selected
   useEffect(() => {
     setSelected(new Set())
-  }, [prefix, debouncedQuery])
+  }, [prefix, debouncedQuery, filters])
+
+  // Filters apply to the folder you set them in
+  useEffect(() => {
+    setFilters(noFilters)
+  }, [prefix])
 
   useEffect(() => {
     if (!searching || !perms.canRead) {
@@ -108,7 +122,7 @@ export default function DrivePage() {
     return () => controller.abort()
   }, [debouncedQuery, searching, perms.canRead])
 
-  const items = useMemo(() => {
+  const allItems = useMemo(() => {
     const base: DriveItem[] = searching
       ? search.items
       : [
@@ -118,32 +132,14 @@ export default function DrivePage() {
     return sortItems(base, sortField, sortDir)
   }, [searching, search.items, listing.folders, listing.files, sortField, sortDir])
 
+  const items = useMemo(() => allItems.filter((i) => matchesFilters(i, filters)), [allItems, filters])
+
   const goTo = useCallback(
     (next: string) => {
       setQuery('')
       navigate(`/drive/${next.split('/').map(encodeURIComponent).join('/')}`)
     },
     [navigate],
-  )
-
-  const preview = useCallback(
-    async (item: DriveItem) => {
-      // Open the tab synchronously so popup blockers allow it, then point it at the signed URL
-      const tab = window.open('', '_blank')
-      try {
-        const signed = await presignDownload(item.key, false)
-        if (tab) {
-          tab.opener = null
-          tab.location.href = signed.url
-        } else {
-          window.location.href = signed.url
-        }
-      } catch (err) {
-        tab?.close()
-        toast.error(errorMessage(err, 'Could not open the file'))
-      }
-    },
-    [toast],
   )
 
   const download = useCallback(
@@ -173,12 +169,19 @@ export default function DrivePage() {
     [toast],
   )
 
+  const [previewKey, setPreviewKey] = useState<string | null>(null)
+  const previewFiles = useMemo<PreviewFile[]>(
+    () => items.flatMap((i) => (i.kind === 'file' ? [{ key: i.key, name: i.name, size: i.size, lastModified: i.lastModified }] : [])),
+    [items],
+  )
+  const previewIndex = previewKey ? previewFiles.findIndex((f) => f.key === previewKey) : -1
+
   const open = useCallback(
     (item: DriveItem) => {
       if (item.kind === 'folder') goTo(item.key)
-      else void preview(item)
+      else setPreviewKey(item.key)
     },
-    [goTo, preview],
+    [goTo],
   )
 
   async function confirmDelete() {
@@ -272,6 +275,12 @@ export default function DrivePage() {
         {searching ? search.error : listing.error}
       </EmptyState>
     )
+  } else if (items.length === 0 && allItems.length > 0) {
+    content = (
+      <EmptyState icon="filter_alt_off" title="Nothing matches these filters" action={<Button variant="tonal" onClick={() => setFilters(noFilters)}>Clear filters</Button>}>
+        {allItems.length} item{allItems.length === 1 ? '' : 's'} here, none of them match.
+      </EmptyState>
+    )
   } else if (items.length === 0) {
     content = searching ? (
       <EmptyState icon="search_off" title="No results">
@@ -302,6 +311,7 @@ export default function DrivePage() {
           }}
           selected={selected}
           onSelectionChange={setSelected}
+          onDeleteSelected={perms.canWrite ? () => setPendingDelete(selectedItems) : undefined}
           canSelect
           showLocation={searching}
           onOpen={open}
@@ -336,7 +346,14 @@ export default function DrivePage() {
             writePref('ps_view', v)
           }}
           selectedCount={selected.size}
+          totalCount={items.length}
+          onSelectAll={() => setSelected(new Set(items.map((i) => i.key)))}
           onClearSelection={() => setSelected(new Set())}
+          filters={
+            perms.canRead && activeConnection !== null && (allItems.length > 0 || hasFilters(filters)) ? (
+              <FilterBar filters={filters} onChange={setFilters} shown={items.length} total={allItems.length} />
+            ) : undefined
+          }
           onDownloadSelected={selectedItems.some((i) => i.kind === 'file') ? () => void download(selectedItems) : undefined}
           onDeleteSelected={perms.canWrite ? () => setPendingDelete(selectedItems) : undefined}
         />
@@ -355,6 +372,15 @@ export default function DrivePage() {
         )}
       </div>
 
+      {previewIndex >= 0 && (
+        <FilePreview
+          files={previewFiles}
+          index={previewIndex}
+          onIndexChange={(i) => setPreviewKey(previewFiles[i]?.key ?? null)}
+          onClose={() => setPreviewKey(null)}
+          onDownload={(f) => void download([{ kind: 'file', key: f.key, name: f.name, size: f.size, lastModified: f.lastModified }])}
+        />
+      )}
       <NewMenu open={newOpen} onClose={() => setNewOpen(false)} onCreateFolder={handleCreateFolder} onFiles={addFiles} />
       <UploadTray items={uploads.items} onCancel={uploads.cancel} onCancelAll={uploads.cancelAll} onClose={uploads.clear} />
       <ConfirmDialog

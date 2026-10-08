@@ -44,12 +44,20 @@ export default function NewMenu({ open, onClose, onCreateFolder, onFiles }: Prop
       />
 
       {open && (
-        <div ref={ref} role="menu" className="fixed left-4 top-[136px] lg:top-[88px] z-[130] w-[280px] bg-surface rounded-lg shadow-menu py-2 anim-pop origin-top-left">
+        <>
+        <div className="lg:hidden fixed inset-0 z-[125] bg-black/30 anim-fade" aria-hidden />
+        <div
+          ref={ref}
+          role="menu"
+          className="fixed z-[130] bg-surface shadow-menu py-2 inset-x-0 bottom-0 rounded-t-[28px] pb-6 anim-slide-up lg:anim-pop lg:inset-x-auto lg:bottom-auto lg:left-4 lg:top-[88px] lg:w-[280px] lg:rounded-lg lg:pb-2 lg:origin-top-left"
+        >
+          <div className="lg:hidden mx-auto mt-1 mb-3 w-8 h-1 rounded-full bg-line" />
           <MenuButton icon="create_new_folder" label="New folder" onClick={() => { onClose(); setFolderDialog(true) }} />
           <div className="my-2 border-t border-line-soft" />
           <MenuButton icon="upload_file" label="File upload" onClick={() => pick(fileInput.current)} />
           <MenuButton icon="drive_folder_upload" label="Folder upload" onClick={() => pick(folderInput.current)} />
         </div>
+        </>
       )}
 
       <NewFolderDialog open={folderDialog} onClose={() => setFolderDialog(false)} onCreate={onCreateFolder} />

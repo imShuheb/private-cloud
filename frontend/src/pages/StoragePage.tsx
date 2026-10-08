@@ -11,6 +11,7 @@ import AppShell from '../components/layout/AppShell'
 import Button, { Spinner } from '../components/ui/Button'
 import ConfirmDialog from '../components/ui/ConfirmDialog'
 import EmptyState from '../components/ui/EmptyState'
+import FilePreview from '../components/preview/FilePreview'
 import { permissionsOf, useUser } from '../context/auth'
 import { useToast } from '../context/toast'
 import { useAnalytics } from '../hooks/useAnalytics'
@@ -29,7 +30,7 @@ export default function StoragePage() {
   const [folderScope, setFolderScope] = useState<'root' | 'all'>('root')
   const [filesVersion, setFilesVersion] = useState(0)
   const [changedSinceScan, setChangedSinceScan] = useState(false)
-  const [pendingDelete, setPendingDelete] = useState<AnalyticsFile | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<AnalyticsFile[] | null>(null)
   const filesRef = useRef<HTMLDivElement>(null)
 
   const report = data?.report ?? null
@@ -58,19 +59,8 @@ export default function StoragePage() {
     navigate(`/drive/${prefix.split('/').map(encodeURIComponent).join('/')}`)
   }
 
-  async function preview(file: AnalyticsFile) {
-    const tab = window.open('', '_blank')
-    try {
-      const signed = await presignDownload(file.key, false)
-      if (tab) {
-        tab.opener = null
-        tab.location.href = signed.url
-      }
-    } catch (err) {
-      tab?.close()
-      toast.error(errorMessage(err, 'Could not open the file'))
-    }
-  }
+  const [previewing, setPreviewing] = useState<AnalyticsFile | null>(null)
+  const preview = (file: AnalyticsFile) => setPreviewing(file)
 
   async function download(file: AnalyticsFile) {
     try {
@@ -89,8 +79,12 @@ export default function StoragePage() {
   async function confirmDelete() {
     if (!pendingDelete) return
     try {
-      await deleteObjects([pendingDelete.key])
-      toast.show(`“${pendingDelete.name}” deleted · rescan to update the totals`)
+      await deleteObjects(pendingDelete.map((f) => f.key))
+      const freed = formatBytes(pendingDelete.reduce((sum, f) => sum + f.size, 0))
+      toast.show(
+        pendingDelete.length === 1 ? `“${pendingDelete[0].name}” deleted · ${freed} freed` : `${pendingDelete.length} files deleted · ${freed} freed`,
+        { tone: 'success' },
+      )
       setChangedSinceScan(true)
       setFilesVersion((v) => v + 1)
     } catch (err) {
@@ -173,7 +167,7 @@ export default function StoragePage() {
         <div className="grid gap-4 xl:grid-cols-2">
           <Card
             title="Largest folders"
-            subtitle="Includes everything inside each folder · select one to list its files"
+            subtitle="Select a folder to list its files"
             actions={
               <div className="flex rounded-full border border-[#747775] overflow-hidden text-xs">
                 {(['root', 'all'] as const).map((scope) => (
@@ -286,10 +280,19 @@ export default function StoragePage() {
         {body}
       </div>
 
+      {previewing && (
+        <FilePreview
+          files={[previewing]}
+          index={0}
+          onIndexChange={() => {}}
+          onClose={() => setPreviewing(null)}
+          onDownload={() => void download(previewing)}
+        />
+      )}
       <ConfirmDialog
         open={!!pendingDelete}
-        title={`Delete “${pendingDelete?.name ?? ''}”?`}
-        message={`This permanently deletes ${pendingDelete ? formatBytes(pendingDelete.size) : ''} from ${folderLabel(pendingDelete?.folder ?? '')}. This can’t be undone.`}
+        title={pendingDelete?.length === 1 ? `Delete “${pendingDelete[0].name}”?` : `Delete ${pendingDelete?.length ?? 0} files?`}
+        message={`This permanently deletes ${formatBytes((pendingDelete ?? []).reduce((sum, f) => sum + f.size, 0))}. This can’t be undone.`}
         confirmLabel="Delete"
         danger
         onConfirm={confirmDelete}

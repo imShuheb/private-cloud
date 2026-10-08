@@ -40,7 +40,7 @@ export default function TypeBreakdown({ buckets, totalBytes, selected, onSelect 
                   </>,
                 )
               }
-              className={cx('h-full min-w-[3px] transition-opacity first:rounded-l-full last:rounded-r-full', selected && selected !== category && 'opacity-30')}
+              className={cx('h-full min-w-[6px] transition-opacity', selected && selected !== category && 'opacity-30')}
               style={{ flexGrow: bucket!.bytes, flexBasis: 0, background: categoryMeta[category].color }}
             />
           ))}
@@ -77,7 +77,6 @@ export default function TypeBreakdown({ buckets, totalBytes, selected, onSelect 
           ))}
         </tbody>
       </table>
-      <p className="text-xs text-ink-3 mt-2">Select a type to filter the file list below.</p>
     </div>
   )
 }
