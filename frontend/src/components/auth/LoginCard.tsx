@@ -1,42 +1,18 @@
-import React from 'react'
+import type { ReactNode } from 'react'
 
-type LoginCardProps = {
-  children: React.ReactNode
-}
-
-const LoginCard: React.FC<LoginCardProps> = ({ children }) => {
+/** Google sign-in style card: brand and heading on the left, form on the right. */
+export default function LoginCard({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-screen flex items-center justify-center p-6 bg-white selection:bg-black selection:text-white">
-      <div className="w-full max-w-[480px] bg-white border border-gray-300 p-8 sm:p-12 text-center shadow-xl animate-in fade-in zoom-in-95 duration-500">
-        {/* Logo Section */}
-        <div className="flex items-center justify-center gap-3 mb-3">
-          <div className="w-12 h-12 border border-black bg-black flex items-center justify-center">
-            <span className="material-symbols-outlined filled text-3xl text-white">cloud</span>
-          </div>
-          <span className="text-[26px] text-gray-900 font-semibold tracking-tight">Private Storage</span>
+    <div className="min-h-full flex flex-col items-center justify-center p-4 sm:p-6 bg-app">
+      <div className="w-full max-w-[1040px] bg-surface rounded-[28px] p-6 sm:p-10 grid gap-8 md:grid-cols-2 anim-pop">
+        <div>
+          <span className="icon filled text-[48px] text-primary">cloud</span>
+          <h1 className="text-[36px] leading-[44px] text-ink mt-4">Sign in</h1>
+          <p className="text-base text-ink mt-4">to continue to Private Storage</p>
         </div>
-
-        <h1 className="text-2xl text-gray-900 mt-6 mb-2 font-semibold">Welcome back</h1>
-        <p className="text-[15px] text-gray-600 mb-10 leading-relaxed font-normal">
-          Manage your files securely in your personal encrypted vault.
-        </p>
-
-        {children}
-
-        {/* Footer info */}
-        <div className="mt-12 pt-8 border-t border-gray-200 flex items-center justify-center gap-6">
-          <div className="flex items-center gap-1.5 text-xs text-gray-500 font-medium tracking-tight">
-            <span className="material-symbols-outlined !text-sm">lock</span>
-            SECURED
-          </div>
-          <div className="flex items-center gap-1.5 text-xs text-gray-500 font-medium tracking-tight">
-            <span className="material-symbols-outlined !text-sm">verified_user</span>
-            S3 VAULT
-          </div>
-        </div>
+        <div>{children}</div>
       </div>
+      <p className="text-xs text-ink-3 mt-6">Your files stay in your own S3-compatible storage.</p>
     </div>
   )
 }
-
-export default LoginCard

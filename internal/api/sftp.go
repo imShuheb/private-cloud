@@ -106,7 +106,7 @@ func (c *sftpController) apply(cfg sftpRuntimeConfig) error {
 				"can_write_files":        boolToExt(user.Permissions.CanWriteFiles),
 				"can_manage_connections": boolToExt(user.Permissions.CanManageConnections),
 				"can_manage_settings":    boolToExt(user.Permissions.CanManageSettings),
-				"can_use_sftp":          boolToExt(user.Permissions.CanUseSFTP),
+				"can_use_sftp":           boolToExt(user.Permissions.CanUseSFTP),
 			}
 			return &ssh.Permissions{Extensions: ext}, nil
 		},
@@ -277,17 +277,59 @@ func (b *sftpBridge) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 		return nil, os.ErrNotExist
 	}
 
-	obj, err := store.DownloadObject(r.Context(), key)
+	info, err := store.HeadObject(r.Context(), key)
 	if err != nil {
-		return nil, os.ErrNotExist
-	}
-	defer obj.Body.Close()
-
-	data, err := io.ReadAll(obj.Body)
-	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil, os.ErrNotExist
+		}
 		return nil, err
 	}
-	return bytes.NewReader(data), nil
+	// Read in ranged chunks instead of loading the whole object into memory
+	return &rangeReaderAt{ctx: r.Context(), store: store, key: key, size: info.Size}, nil
+}
+
+const sftpReadChunk = 4 << 20
+
+// rangeReaderAt serves ReadAt calls from ranged GETs, keeping one chunk buffered
+// because SFTP clients read sequentially in small blocks.
+type rangeReaderAt struct {
+	ctx    context.Context
+	store  storage.Store
+	key    string
+	size   int64
+	mu     sync.Mutex
+	buf    []byte
+	bufOff int64
+}
+
+func (r *rangeReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	if off >= r.size {
+		return 0, io.EOF
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	n := 0
+	for n < len(p) && off < r.size {
+		if off < r.bufOff || off >= r.bufOff+int64(len(r.buf)) {
+			length := min(int64(sftpReadChunk), r.size-off)
+			data, err := r.store.ReadRange(r.ctx, r.key, off, length)
+			if err != nil {
+				return n, err
+			}
+			if len(data) == 0 {
+				return n, io.EOF
+			}
+			r.buf, r.bufOff = data, off
+		}
+		copied := copy(p[n:], r.buf[off-r.bufOff:])
+		n += copied
+		off += int64(copied)
+	}
+	if n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
 }
 
 func (b *sftpBridge) Filewrite(r *sftp.Request) (io.WriterAt, error) {
@@ -333,7 +375,7 @@ func (b *sftpBridge) Filecmd(r *sftp.Request) error {
 		return nil
 	case "Mkdir":
 		key := dirKeyFromPath(r.Filepath)
-		return store.UploadObject(r.Context(), key, "application/x-directory", bytes.NewReader(nil))
+		return store.UploadObject(r.Context(), key, "application/x-directory", bytes.NewReader(nil), 0)
 	case "Rmdir":
 		key := dirKeyFromPath(r.Filepath)
 		return store.DeleteObject(r.Context(), key)
@@ -478,8 +520,15 @@ func (w *uploadWriterAt) Close() error {
 		return err
 	}
 
+	info, err := w.file.Stat()
+	if err != nil {
+		_ = w.file.Close()
+		_ = os.Remove(w.file.Name())
+		return err
+	}
+
 	contentType := "application/octet-stream"
-	if err := w.store.UploadObject(w.ctx, w.key, contentType, w.file); err != nil {
+	if err := w.store.UploadObject(w.ctx, w.key, contentType, w.file, info.Size()); err != nil {
 		_ = w.file.Close()
 		_ = os.Remove(w.file.Name())
 		return err

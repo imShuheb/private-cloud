@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -16,37 +18,45 @@ type loginRequest struct {
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid login payload", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid login payload")
 		return
 	}
 
 	username := strings.TrimSpace(req.Username)
 	password := req.Password
 	if username == "" || password == "" {
-		http.Error(w, "username and password are required", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "username and password are required")
+		return
+	}
+
+	limitKey := loginLimitKey(r, username)
+	if wait := s.logins.retryAfter(limitKey); wait > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("too many failed attempts, try again in %d minutes", int(wait.Minutes())+1))
 		return
 	}
 
 	s.mu.RLock()
 	user, validPassword, err := s.cfg.VerifyUserPassword(username, password)
 	s.mu.RUnlock()
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "invalid credentials", http.StatusUnauthorized)
-			return
-		}
-		http.Error(w, "failed to verify credentials", http.StatusInternalServerError)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "failed to verify credentials")
 		return
 	}
-
-	if !validPassword || user == nil {
-		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+	if err != nil || !validPassword || user == nil {
+		s.logins.fail(limitKey)
+		writeError(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
+	if !user.IsActive {
+		writeError(w, http.StatusForbidden, "this account is disabled")
+		return
+	}
+	s.logins.reset(limitKey)
 
 	sessionID, expiresAt, err := s.sm.create(user.ID, user.Username, user.Role, user.Permissions)
 	if err != nil {
-		http.Error(w, "failed to create session", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "failed to create session")
 		return
 	}
 
@@ -92,13 +102,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie(sessionCookieName)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
-		return
-	}
-
-	session, ok := s.sm.get(cookie.Value)
+	p, ok := s.sessionPrincipal(r)
 	if !ok {
 		writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
 		return
@@ -107,10 +111,10 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"authenticated": true,
 		"user": map[string]any{
-			"id":       session.userID,
-			"username": session.username,
-			"role":     session.role,
-			"permissions": session.perms,
+			"id":          p.userID,
+			"username":    p.username,
+			"role":        p.role,
+			"permissions": p.perms,
 		},
 	})
 }

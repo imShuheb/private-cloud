@@ -3,6 +3,9 @@
 A secure, modern S3-compatible cloud storage explorer. Manage multiple cloud storage accounts with ease using a high-performance Go backend and a responsive React interface.
 
 ## ✨ Highlights
+- **Drive-style Web App**: List and grid views, breadcrumbs, multi-select (click, Ctrl/Cmd, Shift, Ctrl/Cmd+A), drag & drop uploads, folder uploads and an upload panel with per-file cancel.
+- **Storage Insights**: Scan a bucket in the background to see storage by file type, the largest folders (at any depth), size and age breakdowns, possible duplicates, and a sortable, filterable list of the 5,000 largest files.
+- **Bucket-wide Search**: Finds files by name anywhere in the bucket, not just the current folder.
 - **Multi-Connection Ready**: Add and manage multiple S3 storage profiles (AWS, MinIO, R2, Wasabi).
 - **SQLite Persistence**: Admin identity + connections are persisted in SQLite (`config/private-storage.db`).
 - **Encryption at Rest**: S3 Access/Secret keys are AES-GCM encrypted before being written to SQLite.
@@ -13,7 +16,7 @@ A secure, modern S3-compatible cloud storage explorer. Manage multiple cloud sto
 - **Built-in SFTP Bridge**: SFTP uses the same active web connection for consistent file access.
 - **Settings Page**: Manage server settings and users access from a dedicated settings area.
 - **Optional HTTPS**: Native TLS support via cert/key environment variables.
-- **Modern Stack**: Built with Go 1.22+, React 18+, and Tailwind CSS.
+- **Modern Stack**: Built with Go 1.25+, React 18+, and Tailwind CSS.
 - **Security First**: Presigned URL support for secure uploads/downloads.
 
 ---
@@ -178,6 +181,32 @@ Quick setup:
 ### File Access Behavior (Web)
 - **Preview**: opens the file in a new browser tab.
 - **Download**: triggers an actual attachment download.
+- Uploads and downloads go **directly between the browser and the bucket** with presigned URLs, so the bucket needs a CORS rule allowing `GET`/`PUT` from the app's origin and exposing `ETag`.
+
+### Storage Insights
+**Storage insights** (left menu) scans the active bucket's object listing, never the file contents. The first scan starts automatically; **Rescan** refreshes it, and a scan can be stopped at any time (the previous results are kept). Results stay in memory per connection and are lost on restart. On very large buckets a scan takes a while: it pages through the listing 1,000 objects at a time.
+
+### Security behaviour
+- Changing a user's permissions, disabling them or deleting them applies **immediately**, including to sessions that are already signed in.
+- After 10 failed sign-ins for one username from one address within 15 minutes, further attempts are refused for the rest of that window.
+- The API never returns stored S3 keys; editing a connection with blank keys keeps the saved ones.
+- New and edited connections are tested against the bucket before they are saved.
+
+### API (main endpoints)
+All endpoints except `/api/auth/*` and `/api/health` need a session cookie or `ADMIN_API_KEY`. Errors are JSON: `{"error": "..."}`.
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/drive/list?prefix=&continuationToken=` | One folder, paginated |
+| `GET /api/drive/search?q=&limit=` | Name search across the bucket |
+| `GET /api/drive/stats` | Totals from the latest scan (starts one if needed) |
+| `POST /api/drive/presign/upload` | Presigned PUT for a key |
+| `GET /api/drive/presign/download?key=&download=1` | Presigned GET; `download=1` forces a file save |
+| `POST /api/bulk-objects-delete` | Delete files and folders (`{"keys": [...]}`) |
+| `GET /api/analytics` | Scan status and report summary |
+| `POST /api/analytics/scan`, `POST /api/analytics/scan/cancel` | Start or stop a scan |
+| `GET /api/analytics/files?sort=size\|name\|modified\|type&order=&category=&q=&minSize=&folder=&offset=&limit=` | Largest files, filtered and paged |
+| `GET /api/connections/active` | Active storage name and bucket |
 
 ---
 ## 📄 License

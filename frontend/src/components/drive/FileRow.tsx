@@ -1,122 +1,182 @@
-import React from 'react'
-import { formatBytes, formatDate, getFileIcon } from '../../lib'
-import type { FileInfo, FolderInfo } from '../../types'
+import type { KeyboardEvent, MouseEvent } from 'react'
+import { cx, folderLabel, formatBytes, formatDate } from '../../lib'
+import type { DriveItem } from '../../types'
+import Menu from '../ui/Menu'
+import { itemIcon, menuItems, type ItemActions } from './itemActions'
 
-type FileRowProps = {
-  item: FileInfo | FolderInfo
-  isFolder: boolean
-  onClick: () => void
-  onPreview?: (f: FileInfo) => void
-  onDownload?: (f: FileInfo) => void
-  onDelete: (item: any) => void
-  location?: string
-  selected?: boolean
-  onToggleSelect?: () => void
-  canWrite: boolean
+type RowProps = ItemActions & {
+  item: DriveItem
+  selected: boolean
+  showLocation: boolean
+  canSelect: boolean
+  onSelect: (item: DriveItem, e: MouseEvent) => void
+  onToggle: (item: DriveItem) => void
 }
 
-const FileRow: React.FC<FileRowProps> = ({ 
-  item, 
-  isFolder, 
-  onClick, 
-  onPreview,
-  onDownload, 
-  onDelete, 
-  location,
-  selected,
-  onToggleSelect,
-  canWrite
-}) => {
-  const iconInfo = getFileIcon(isFolder ? 'folder' : (item as FileInfo).name || (item as FileInfo).key)
-  const name = isFolder ? (item as FolderInfo).name : ((item as FileInfo).name || (item as FileInfo).key)
-  const folderItem = item as FolderInfo
-  const folderSize = folderItem.size
-  const folderModified = folderItem.lastModified
-  const size = isFolder
-    ? (folderSize !== undefined && folderSize !== null ? formatBytes(Number(folderSize || 0)) : '–')
-    : formatBytes(Number((item as FileInfo).size || 0))
-  const modified = isFolder
-    ? (folderModified ? formatDate(folderModified) : '–')
-    : formatDate((item as FileInfo).lastModified)
+/** One row of the list view. Click selects, double click (or Enter) opens. */
+export default function FileRow({ item, selected, showLocation, canSelect, onSelect, onToggle, ...actions }: RowProps) {
+  const icon = itemIcon(item)
 
   return (
     <div
-      className={`flex items-center gap-3 md:gap-4 px-4 py-3 border-b border-gray-100 transition-colors group cursor-default select-none ${selected ? 'bg-black text-white' : 'hover:bg-gray-50'}`}
-      onClick={() => {
-        if (isFolder) onClick()
-        else if (canWrite) onToggleSelect?.()
-      }}
+      role="row"
+      aria-selected={selected}
       tabIndex={0}
-      role="button"
-      onKeyDown={(e) => e.key === 'Enter' && (isFolder ? onClick() : (canWrite ? onToggleSelect?.() : undefined))}
-    >
-      <div 
-        className="w-8 shrink-0 flex items-center justify-center"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {canWrite ? (
-          <input 
-            type="checkbox" 
-            className="w-4 h-4 border-gray-400 text-black cursor-pointer"
-            checked={!!selected}
-            onChange={onToggleSelect}
-          />
-        ) : null}
-      </div>
-      <div className="flex-1 flex items-center gap-4 min-w-0">
-        <span className={`material-symbols-outlined text-2xl shrink-0 ${selected ? 'text-white' : isFolder ? 'filled text-black' : iconInfo.className}`}>
-          {isFolder ? 'folder' : iconInfo.icon}
-        </span>
-        <span className={`text-sm truncate ${isFolder ? 'font-medium' : ''}`}>{name}</span>
-      </div>
-      {location !== undefined && (
-        <span className={`w-48 shrink-0 text-left text-[11px] font-medium truncate px-2 py-1 border ${selected ? 'text-white border-white' : 'text-gray-700 border-gray-200'}`} title={location}>
-          {location || 'Root'}
-        </span>
+      onClick={(e) => onSelect(item, e)}
+      onDoubleClick={() => actions.onOpen(item)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') actions.onOpen(item)
+        if (e.key === ' ' && canSelect) {
+          e.preventDefault()
+          onToggle(item)
+        }
+      }}
+      className={cx(
+        'group grid items-center gap-4 h-12 px-4 sm:px-6 border-b border-line-soft cursor-default select-none outline-none transition-colors',
+        showLocation ? 'grid-cols-[minmax(0,1fr)_40px] md:grid-cols-[minmax(0,1fr)_200px_140px_100px_40px]' : 'grid-cols-[minmax(0,1fr)_40px] md:grid-cols-[minmax(0,1fr)_140px_100px_40px]',
+        selected ? 'bg-selected' : 'hover:bg-hover focus-visible:bg-hover',
       )}
-      <span className={`w-24 shrink-0 text-right text-[13px] font-normal ${selected ? 'text-white' : 'text-gray-700'}`}>{size}</span>
-      <span className={`w-40 shrink-0 text-right text-[13px] font-normal ${selected ? 'text-white' : 'text-gray-700'}`}>{modified}</span>
-      
-      <div className="w-32 shrink-0 flex justify-end gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
-        {isFolder && (
+    >
+      <div className="flex items-center gap-4 min-w-0" role="gridcell">
+        {canSelect ? (
           <button
-            className={`w-8 h-8 flex items-center justify-center border transition-all ${selected ? 'text-white border-white' : 'text-black border-gray-300 hover:border-black'}`}
-            title="Open"
-            onClick={(e) => { e.stopPropagation(); onClick() }}
+            aria-label={selected ? `Deselect ${item.name}` : `Select ${item.name}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              onToggle(item)
+            }}
+            onDoubleClick={(e) => e.stopPropagation()}
+            className="relative w-6 h-6 -ml-1 flex items-center justify-center shrink-0"
           >
-            <span className="material-symbols-outlined !text-xl">folder_open</span>
+            <span className={cx('icon text-[22px] absolute transition-opacity', icon.className, selected ? 'opacity-0' : 'group-hover:opacity-0')}>
+              {icon.icon}
+            </span>
+            <span className={cx('icon text-[20px] absolute transition-opacity text-primary', selected ? 'opacity-100 filled' : 'opacity-0 group-hover:opacity-100 text-ink-2')}>
+              {selected ? 'check_box' : 'check_box_outline_blank'}
+            </span>
           </button>
+        ) : (
+          <span className={cx('icon text-[22px]', icon.className)}>{icon.icon}</span>
         )}
-        {!isFolder && onPreview && (
-          <button
-            className={`w-8 h-8 flex items-center justify-center border transition-all ${selected ? 'text-white border-white' : 'text-black border-gray-300 hover:border-black'}`}
-            title="Preview"
-            onClick={(e) => { e.stopPropagation(); onPreview(item as FileInfo) }}
-          >
-            <span className="material-symbols-outlined !text-xl">visibility</span>
-          </button>
-        )}
-        {!isFolder && onDownload && (
-          <button
-            className={`w-8 h-8 flex items-center justify-center border transition-all ${selected ? 'text-white border-white' : 'text-black border-gray-300 hover:border-black'}`}
-            title="Download"
-            onClick={(e) => { e.stopPropagation(); onDownload(item as FileInfo) }}
-          >
-            <span className="material-symbols-outlined !text-xl">download</span>
-          </button>
-        )}
-        {canWrite ? (
-          <button
-            className={`w-8 h-8 flex items-center justify-center border transition-all ${selected ? 'text-white border-white' : 'text-black border-gray-300 hover:border-black'}`}
-            title="Delete"
-            onClick={(e) => { e.stopPropagation(); onDelete(item) }}
-          >
-            <span className="material-symbols-outlined !text-xl">delete</span>
-          </button>
-        ) : null}
+        <span className="truncate text-sm text-ink font-medium" title={item.name}>
+          {item.name}
+        </span>
+      </div>
+
+      {showLocation && (
+        <button
+          role="gridcell"
+          className="hidden md:flex items-center gap-2 min-w-0 h-8 px-2 -mx-2 rounded-full text-left text-sm text-ink-2 hover:bg-press"
+          onClick={(e) => {
+            e.stopPropagation()
+            actions.onOpenLocation?.(item)
+          }}
+          title={folderLabel(item.location ?? '')}
+        >
+          <span className="icon text-[18px] file-folder filled">folder</span>
+          <span className="truncate">{folderLabel(item.location ?? '')}</span>
+        </button>
+      )}
+      <span role="gridcell" className="hidden md:block text-sm text-ink-2 truncate">
+        {item.kind === 'file' ? formatDate(item.lastModified) : '—'}
+      </span>
+      <span role="gridcell" className="hidden md:block text-sm text-ink-2 truncate">
+        {item.kind === 'file' ? formatBytes(item.size) : '—'}
+      </span>
+      <div role="gridcell" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+        <Menu
+          trigger={({ toggle, open }) => (
+            <button
+              onClick={toggle}
+              aria-label={`More actions for ${item.name}`}
+              className={cx(
+                'w-8 h-8 rounded-full flex items-center justify-center text-ink-2 hover:bg-press',
+                open ? 'opacity-100 bg-press' : 'opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-visible:opacity-100',
+              )}
+            >
+              <span className="icon">more_vert</span>
+            </button>
+          )}
+          items={menuItems(item, actions)}
+        />
       </div>
     </div>
   )
 }
 
-export default FileRow
+type CardProps = RowProps
+
+/** Grid-view card: folders are compact pills, files get a large icon preview. */
+export function FileCard({ item, selected, canSelect, onSelect, onToggle, ...actions }: CardProps) {
+  const icon = itemIcon(item)
+  const menu = (
+    <div onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+      <Menu
+        trigger={({ toggle }) => (
+          <button onClick={toggle} aria-label={`More actions for ${item.name}`} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-2 hover:bg-press">
+            <span className="icon">more_vert</span>
+          </button>
+        )}
+        items={menuItems(item, actions)}
+      />
+    </div>
+  )
+
+  const common = {
+    role: 'gridcell' as const,
+    'aria-selected': selected,
+    tabIndex: 0,
+    onClick: (e: MouseEvent) => onSelect(item, e),
+    onDoubleClick: () => actions.onOpen(item),
+    onKeyDown: (e: KeyboardEvent) => {
+      if (e.key === 'Enter') actions.onOpen(item)
+      if (e.key === ' ' && canSelect) {
+        e.preventDefault()
+        onToggle(item)
+      }
+    },
+  }
+
+  if (item.kind === 'folder') {
+    return (
+      <div
+        {...common}
+        className={cx(
+          'h-12 rounded-xl flex items-center gap-3 pl-4 pr-1 cursor-default select-none outline-none transition-colors',
+          selected ? 'bg-selected' : 'bg-raised hover:bg-press focus-visible:bg-press',
+        )}
+      >
+        <span className={cx('icon text-[22px]', icon.className)}>{icon.icon}</span>
+        <span className="flex-1 truncate text-sm font-medium text-ink" title={item.name}>
+          {item.name}
+        </span>
+        {menu}
+      </div>
+    )
+  }
+
+  return (
+    <div
+      {...common}
+      className={cx(
+        'rounded-xl p-2 pt-1 cursor-default select-none outline-none transition-colors',
+        selected ? 'bg-selected' : 'bg-raised hover:bg-press focus-visible:bg-press',
+      )}
+    >
+      <div className="flex items-center gap-3 h-10 pl-2">
+        <span className={cx('icon text-[20px]', icon.className)}>{icon.icon}</span>
+        <span className="flex-1 truncate text-sm font-medium text-ink" title={item.name}>
+          {item.name}
+        </span>
+        {menu}
+      </div>
+      <div className="h-[140px] rounded-lg bg-surface flex items-center justify-center">
+        <span className={cx('icon text-[64px] opacity-90', icon.className)}>{icon.icon}</span>
+      </div>
+      <div className="px-2 pt-2 text-xs text-ink-2 flex justify-between gap-2">
+        <span>{formatBytes(item.size)}</span>
+        <span>{formatDate(item.lastModified)}</span>
+      </div>
+    </div>
+  )
+}

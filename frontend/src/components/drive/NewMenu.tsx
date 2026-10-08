@@ -1,109 +1,117 @@
-import React from 'react'
+import { useCallback, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useDismiss } from '../../hooks/useDismiss'
+import Button from '../ui/Button'
+import Modal from '../ui/Modal'
+import TextField from '../ui/TextField'
 
-type NewMenuProps = {
-  isOpen: boolean
+type Props = {
+  open: boolean
   onClose: () => void
-  newFolder: string
-  onNewFolderChange: (val: string) => void
-  onCreateFolder: () => void
-  onUpload: (files: FileList | null) => void
-  loading: boolean
-  fileRef: React.RefObject<HTMLInputElement>
-  folderRef: React.RefObject<HTMLInputElement>
-  folderInputRef: React.RefObject<HTMLInputElement>
+  onCreateFolder: (name: string) => Promise<void>
+  onFiles: (files: File[]) => void
 }
 
-const NewMenu: React.FC<NewMenuProps> = ({
-  isOpen,
-  onClose,
-  newFolder,
-  onNewFolderChange,
-  onCreateFolder,
-  onUpload,
-  loading,
-  fileRef,
-  folderRef,
-  folderInputRef
-}) => {
-  if (!isOpen) return null
+/** The "New" popover: new folder, file upload, folder upload. */
+export default function NewMenu({ open, onClose, onCreateFolder, onFiles }: Props) {
+  const ref = useRef<HTMLDivElement>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
+  const folderInput = useRef<HTMLInputElement>(null)
+  const [folderDialog, setFolderDialog] = useState(false)
+  const close = useCallback(() => onClose(), [onClose])
+  useDismiss(ref, open, close)
+
+  function pick(input: HTMLInputElement | null) {
+    input?.click()
+    onClose()
+  }
+
+  function takeFiles(e: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = ''
+    onFiles(files)
+  }
 
   return (
     <>
-      <div className="fixed inset-0 z-60" onClick={onClose} />
-      <div className="absolute left-3 md:left-6 top-20 md:top-24 z-70 w-[calc(100vw-1.5rem)] max-w-80 bg-white border border-gray-300 shadow-lg py-3 animate-in fade-in zoom-in-95 duration-150 origin-top-left">
-        <div className="px-5 py-4 border-b border-gray-300 last:border-0">
-          <div className="text-[10px] font-bold text-black uppercase tracking-widest mb-3 flex items-center gap-2">
-            <span className="w-1.5 h-1.5 bg-black" />
-            Create
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              ref={folderInputRef}
-              className="flex-1 px-3 py-2.5 border border-gray-300 text-sm outline-none placeholder-gray-500 transition-all font-medium focus:border-black"
-              value={newFolder}
-              onChange={(e) => onNewFolderChange(e.target.value)}
-              placeholder="Folder name"
-              onKeyDown={(e) => e.key === 'Enter' && onCreateFolder()}
-              autoFocus
-            />
-            <button
-              className="flex items-center justify-center w-10 h-10 bg-black text-white border border-black transition-all disabled:opacity-50"
-              onClick={onCreateFolder}
-              disabled={loading || !newFolder.trim()}
-            >
-              <span className="material-symbols-outlined !text-xl">create_new_folder</span>
-            </button>
-          </div>
+      <input ref={fileInput} type="file" multiple hidden onChange={takeFiles} />
+      <input
+        ref={folderInput}
+        type="file"
+        hidden
+        onChange={takeFiles}
+        // Non-standard attributes for picking a whole folder
+        {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
+      />
+
+      {open && (
+        <div ref={ref} role="menu" className="fixed left-4 top-[136px] lg:top-[88px] z-[130] w-[280px] bg-surface rounded-lg shadow-menu py-2 anim-pop origin-top-left">
+          <MenuButton icon="create_new_folder" label="New folder" onClick={() => { onClose(); setFolderDialog(true) }} />
+          <div className="my-2 border-t border-line-soft" />
+          <MenuButton icon="upload_file" label="File upload" onClick={() => pick(fileInput.current)} />
+          <MenuButton icon="drive_folder_upload" label="Folder upload" onClick={() => pick(folderInput.current)} />
         </div>
+      )}
 
-        <div className="px-5 py-4 last:border-0">
-          <div className="text-[10px] font-bold text-black uppercase tracking-widest mb-3 flex items-center gap-2">
-            <span className="w-1.5 h-1.5 bg-black" />
-            File Upload
-          </div>
-          <div className="flex flex-col gap-3">
-            <div className="relative group">
-              <input
-                ref={fileRef}
-                type="file"
-                multiple
-                className="block w-full text-[13px] text-gray-700 file:mr-3 file:py-2 file:px-4 file:border file:border-gray-300 file:text-xs file:font-semibold file:bg-white file:text-black transition-all cursor-pointer"
-                disabled={loading}
-                onChange={(e) => onUpload(e.target.files)}
-              />
-              <div className="mt-2 text-[10px] text-gray-600 font-medium ml-1 italic transition-colors">
-                Hold Ctrl/Shift to select multiple files
-              </div>
-            </div>
-
-            <div className="h-px bg-gray-300 my-1" />
-
-            <div className="relative group">
-              <div className="text-[10px] font-bold text-black uppercase tracking-widest mb-3 flex items-center gap-2">
-                <span className="w-1.5 h-1.5 bg-black" />
-                Folder Upload
-              </div>
-              <input
-                ref={folderRef}
-                type="file"
-                /* @ts-ignore */
-                webkitdirectory=""
-                directory=""
-                className="block w-full text-[13px] text-gray-600 file:mr-3 file:py-2 file:px-4 file:border file:border-gray-300 file:text-xs file:font-semibold file:bg-white file:text-black transition-all cursor-pointer"
-                disabled={loading}
-                onChange={(e) => onUpload(e.target.files)}
-              />
-            </div>
-            
-            {/* The single Upload button is now handled by onChange above, but we keep it for manual trigger if needed or as a placeholder */}
-            <div className="mt-4 pt-4 border-t border-gray-300 text-[10px] text-gray-700 text-center italic">
-              Files will start uploading immediately after selection
-            </div>
-          </div>
-        </div>
-      </div>
+      <NewFolderDialog open={folderDialog} onClose={() => setFolderDialog(false)} onCreate={onCreateFolder} />
     </>
   )
 }
 
-export default NewMenu
+function MenuButton({ icon, label, onClick }: { icon: string; label: string; onClick: () => void }) {
+  return (
+    <button role="menuitem" onClick={onClick} className="w-full flex items-center gap-4 h-12 px-4 text-sm text-ink hover:bg-hover">
+      <span className="icon text-ink-2">{icon}</span>
+      {label}
+    </button>
+  )
+}
+
+function NewFolderDialog({ open, onClose, onCreate }: { open: boolean; onClose: () => void; onCreate: (name: string) => Promise<void> }) {
+  const [name, setName] = useState('Untitled folder')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const cleaned = name.trim().replaceAll('\\', '/').replace(/^\/+|\/+$/g, '')
+
+  async function submit(e: FormEvent) {
+    e.preventDefault()
+    if (!cleaned) {
+      setError('Enter a folder name')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      await onCreate(cleaned)
+      setName('Untitled folder')
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not create the folder')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="New folder" width="sm">
+      <form onSubmit={submit} className="pb-6">
+        <TextField
+          label="Folder name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onFocus={(e) => e.target.select()}
+          hint={error || 'Use “/” to create nested folders, e.g. photos/2026'}
+          aria-invalid={!!error}
+        />
+        <div className="flex justify-end gap-2 mt-6">
+          <Button variant="text" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="text" loading={busy} disabled={!cleaned}>
+            Create
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  )
+}

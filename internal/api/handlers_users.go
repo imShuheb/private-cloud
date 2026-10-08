@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -33,7 +34,7 @@ type updateUserPasswordRequest struct {
 
 func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -41,7 +42,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := s.cfg.ListUsers()
 	s.mu.RUnlock()
 	if err != nil {
-		http.Error(w, "failed to list users", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "failed to list users")
 		return
 	}
 
@@ -50,19 +51,23 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	var req createUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 
 	req.Username = strings.TrimSpace(req.Username)
-	if req.Username == "" || strings.TrimSpace(req.Password) == "" {
-		http.Error(w, "username and password are required", http.StatusBadRequest)
+	if req.Username == "" {
+		writeError(w, http.StatusBadRequest, "username is required")
+		return
+	}
+	if msg := passwordProblem(req.Password); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 
@@ -70,7 +75,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	user, err := s.cfg.CreateLocalUser(req.Username, req.Password)
 	s.mu.Unlock()
 	if err != nil {
-		http.Error(w, "failed to create user: "+err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "failed to create user: "+err.Error())
 		return
 	}
 
@@ -81,13 +86,13 @@ func (s *Server) handleUsersMutations(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/users/")
 	parts := strings.Split(path, "/")
 	if len(parts) != 2 {
-		http.Error(w, "invalid users path", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid users path")
 		return
 	}
 
 	id, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil || id <= 0 {
-		http.Error(w, "invalid user id", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
 
@@ -100,19 +105,19 @@ func (s *Server) handleUsersMutations(w http.ResponseWriter, r *http.Request) {
 	case "password":
 		s.handleUpdateUserPassword(w, r, id)
 	default:
-		http.Error(w, "unknown users action", http.StatusNotFound)
+		writeError(w, http.StatusNotFound, "unknown users action")
 	}
 }
 
 func (s *Server) handleUpdateUserPermissions(w http.ResponseWriter, r *http.Request, userID int64) {
 	if r.Method != http.MethodPut {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	var req updateUserPermissionsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 
@@ -128,7 +133,7 @@ func (s *Server) handleUpdateUserPermissions(w http.ResponseWriter, r *http.Requ
 	user, err := s.cfg.GetUserByID(userID)
 	if err != nil {
 		s.mu.Unlock()
-		http.Error(w, "user not found", http.StatusNotFound)
+		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
 	if user.Role == appconfig.RoleOwner {
@@ -142,13 +147,13 @@ func (s *Server) handleUpdateUserPermissions(w http.ResponseWriter, r *http.Requ
 	}
 	if err := s.cfg.UpsertUserPermissions(userID, perms); err != nil {
 		s.mu.Unlock()
-		http.Error(w, "failed to update permissions", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "failed to update permissions")
 		return
 	}
 	updated, err := s.cfg.GetUserByID(userID)
 	s.mu.Unlock()
 	if err != nil {
-		http.Error(w, "failed to load updated user", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "failed to load updated user")
 		return
 	}
 
@@ -157,13 +162,13 @@ func (s *Server) handleUpdateUserPermissions(w http.ResponseWriter, r *http.Requ
 
 func (s *Server) handleUpdateUserActive(w http.ResponseWriter, r *http.Request, userID int64) {
 	if r.Method != http.MethodPut {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	var req updateUserActiveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 
@@ -175,14 +180,17 @@ func (s *Server) handleUpdateUserActive(w http.ResponseWriter, r *http.Request, 
 		if errors.Is(err, appconfig.ErrLastOwner) {
 			status = http.StatusConflict
 		}
-		http.Error(w, err.Error(), status)
+		writeError(w, status, err.Error())
 		return
 	}
 	updated, err := s.cfg.GetUserByID(userID)
 	s.mu.Unlock()
 	if err != nil {
-		http.Error(w, "failed to load updated user", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "failed to load updated user")
 		return
+	}
+	if !req.IsActive {
+		s.sm.deleteUser(userID)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"user": updated})
@@ -190,18 +198,18 @@ func (s *Server) handleUpdateUserActive(w http.ResponseWriter, r *http.Request, 
 
 func (s *Server) handleUpdateUserPassword(w http.ResponseWriter, r *http.Request, userID int64) {
 	if r.Method != http.MethodPut {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	var req updateUserPasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 
-	if strings.TrimSpace(req.Password) == "" {
-		http.Error(w, "password is required", http.StatusBadRequest)
+	if msg := passwordProblem(req.Password); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 
@@ -209,8 +217,12 @@ func (s *Server) handleUpdateUserPassword(w http.ResponseWriter, r *http.Request
 	err := s.cfg.SetUserPassword(userID, req.Password)
 	s.mu.Unlock()
 	if err != nil {
-		http.Error(w, "failed to update password", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "failed to update password")
 		return
+	}
+	// Sign out existing sessions; the user logs in again with the new password
+	if p, ok := principalFromRequest(r); !ok || p.userID != userID {
+		s.sm.deleteUser(userID)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"updated": true})
@@ -218,20 +230,20 @@ func (s *Server) handleUpdateUserPassword(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	idText := strings.TrimPrefix(r.URL.Path, "/api/users/")
 	idText = strings.TrimSpace(idText)
 	if idText == "" || strings.Contains(idText, "/") {
-		http.Error(w, "invalid user id", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
 
 	id, err := strconv.ParseInt(idText, 10, 64)
 	if err != nil || id <= 0 {
-		http.Error(w, "invalid user id", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
 
@@ -241,14 +253,24 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, appconfig.ErrLastOwner):
-			http.Error(w, err.Error(), http.StatusConflict)
+			writeError(w, http.StatusConflict, err.Error())
 		case errors.Is(err, appconfig.ErrUserNotFound):
-			http.Error(w, err.Error(), http.StatusNotFound)
+			writeError(w, http.StatusNotFound, err.Error())
 		default:
-			http.Error(w, "failed to delete user", http.StatusInternalServerError)
+			writeError(w, http.StatusInternalServerError, "failed to delete user")
 		}
 		return
 	}
 
+	s.sm.deleteUser(id)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+}
+
+const minPasswordLength = 8
+
+func passwordProblem(password string) string {
+	if len(strings.TrimSpace(password)) < minPasswordLength {
+		return fmt.Sprintf("password must be at least %d characters", minPasswordLength)
+	}
+	return ""
 }

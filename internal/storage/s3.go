@@ -2,8 +2,11 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -13,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3Types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 )
 
 type S3Store struct {
@@ -85,36 +89,54 @@ func (s *S3Store) ListObjects(ctx context.Context, prefix, continuationToken str
 	}, nil
 }
 
-func (s *S3Store) GetStats(ctx context.Context) (DriveStats, error) {
-	var stats DriveStats
-	var continuationToken *string
+func (s *S3Store) Ping(ctx context.Context) error {
+	_, err := s.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(s.bucket)})
+	return err
+}
 
-	for {
-		out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-			Bucket:            aws.String(s.bucket),
-			ContinuationToken: continuationToken,
-		})
+func (s *S3Store) Walk(ctx context.Context, prefix string, fn func(ObjectInfo) error) error {
+	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket:  aws.String(s.bucket),
+		Prefix:  aws.String(prefix),
+		MaxKeys: aws.Int32(1000),
+	})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			return stats, err
+			return err
 		}
-
-		for _, obj := range out.Contents {
+		for _, obj := range page.Contents {
 			key := aws.ToString(obj.Key)
-			if strings.HasSuffix(key, "/") {
-				stats.TotalFolders++
-			} else {
-				stats.TotalFiles++
-				stats.TotalSize += aws.ToInt64(obj.Size)
+			err := fn(ObjectInfo{
+				Key:          key,
+				Name:         objectNameFromKey("", key),
+				Size:         aws.ToInt64(obj.Size),
+				LastModified: aws.ToTime(obj.LastModified),
+				ETag:         aws.ToString(obj.ETag),
+			})
+			if errors.Is(err, ErrStopWalk) {
+				return nil
+			}
+			if err != nil {
+				return err
 			}
 		}
-
-		if !aws.ToBool(out.IsTruncated) {
-			break
-		}
-		continuationToken = out.NextContinuationToken
 	}
+	return nil
+}
 
-	return stats, nil
+func (s *S3Store) GetStats(ctx context.Context) (DriveStats, error) {
+	var stats DriveStats
+	err := s.Walk(ctx, "", func(obj ObjectInfo) error {
+		if strings.HasSuffix(obj.Key, "/") {
+			stats.TotalFolders++
+		} else {
+			stats.TotalFiles++
+			stats.TotalSize += obj.Size
+		}
+		return nil
+	})
+	return stats, err
 }
 
 func (s *S3Store) ListBrowser(ctx context.Context, prefix, continuationToken string, limit int32) (BrowserListResult, error) {
@@ -147,9 +169,15 @@ func (s *S3Store) ListBrowser(ctx context.Context, prefix, continuationToken str
 	}
 
 	files := make([]ObjectInfo, 0, len(out.Contents))
+	markerFound := false
 	for _, obj := range out.Contents {
 		key := aws.ToString(obj.Key)
-		if key == "" || key == normalizedPrefix || strings.HasSuffix(key, "/") {
+		if key == normalizedPrefix {
+			// The folder's own marker object: the folder exists even if it's empty
+			markerFound = true
+			continue
+		}
+		if key == "" || strings.HasSuffix(key, "/") {
 			continue
 		}
 		files = append(files, ObjectInfo{
@@ -161,7 +189,7 @@ func (s *S3Store) ListBrowser(ctx context.Context, prefix, continuationToken str
 		})
 	}
 
-	if normalizedPrefix != "" && len(folders) == 0 && len(files) == 0 {
+	if normalizedPrefix != "" && !markerFound && len(folders) == 0 && len(files) == 0 && strings.TrimSpace(continuationToken) == "" {
 		return BrowserListResult{}, ErrNotFound
 	}
 
@@ -175,13 +203,18 @@ func (s *S3Store) ListBrowser(ctx context.Context, prefix, continuationToken str
 	}, nil
 }
 
-func (s *S3Store) UploadObject(ctx context.Context, key, contentType string, body io.Reader) error {
-	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+func (s *S3Store) UploadObject(ctx context.Context, key, contentType string, body io.Reader, size int64) error {
+	input := &s3.PutObjectInput{
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(key),
 		Body:        body,
 		ContentType: aws.String(contentType),
-	})
+	}
+	if size >= 0 {
+		// Without a length the SDK can't stream a non-seekable body (e.g. an HTTP request body)
+		input.ContentLength = aws.Int64(size)
+	}
+	_, err := s.client.PutObject(ctx, input)
 	return err
 }
 
@@ -221,6 +254,9 @@ func (s *S3Store) DownloadObject(ctx context.Context, key string) (DownloadObjec
 		Key:    aws.String(key),
 	})
 	if err != nil {
+		if isNotFound(err) {
+			return DownloadObject{}, ErrNotFound
+		}
 		return DownloadObject{}, err
 	}
 
@@ -231,15 +267,63 @@ func (s *S3Store) DownloadObject(ctx context.Context, key string) (DownloadObjec
 	}, nil
 }
 
-func (s *S3Store) PresignDownload(ctx context.Context, key string, expires time.Duration) (PresignedRequest, error) {
+func (s *S3Store) ReadRange(ctx context.Context, key string, offset, length int64) ([]byte, error) {
+	if length <= 0 {
+		return nil, nil
+	}
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+		Range:  aws.String(fmt.Sprintf("bytes=%d-%d", offset, offset+length-1)),
+	})
+	if err != nil {
+		if isNotFound(err) {
+			return nil, ErrNotFound
+		}
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "InvalidRange" {
+			return nil, io.EOF
+		}
+		return nil, err
+	}
+	defer out.Body.Close()
+	return io.ReadAll(out.Body)
+}
+
+func (s *S3Store) HeadObject(ctx context.Context, key string) (ObjectInfo, error) {
+	out, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		if isNotFound(err) {
+			return ObjectInfo{}, ErrNotFound
+		}
+		return ObjectInfo{}, err
+	}
+	return ObjectInfo{
+		Key:          key,
+		Name:         objectNameFromKey("", key),
+		Size:         aws.ToInt64(out.ContentLength),
+		LastModified: aws.ToTime(out.LastModified),
+		ETag:         aws.ToString(out.ETag),
+	}, nil
+}
+
+func (s *S3Store) PresignDownload(ctx context.Context, key string, expires time.Duration, attachmentName string) (PresignedRequest, error) {
 	if expires <= 0 {
 		expires = 15 * time.Minute
 	}
 
-	out, err := s.ps.PresignGetObject(ctx, &s3.GetObjectInput{
+	input := &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
-	}, func(o *s3.PresignOptions) {
+	}
+	if attachmentName != "" {
+		input.ResponseContentDisposition = aws.String(mime.FormatMediaType("attachment", map[string]string{"filename": attachmentName}))
+	}
+
+	out, err := s.ps.PresignGetObject(ctx, input, func(o *s3.PresignOptions) {
 		o.Expires = expires
 	})
 	if err != nil {
@@ -293,7 +377,7 @@ func (s *S3Store) DeleteObject(ctx context.Context, key string) error {
 			}
 			continuationToken = out.NextContinuationToken
 		}
-		fmt.Printf("[Storage] Recursively deleted %d objects under %s", totalDeleted, key)
+		log.Printf("[storage] recursively deleted %d objects under %s", totalDeleted, key)
 		return nil
 	}
 
@@ -341,7 +425,8 @@ func (s *S3Store) Bucket() string {
 func mapFromSignedHeader(h http.Header) map[string]string {
 	out := make(map[string]string, len(h))
 	for key, values := range h {
-		if len(values) == 0 {
+		// Browsers refuse to set Host themselves; it's always sent anyway
+		if len(values) == 0 || strings.EqualFold(key, "Host") {
 			continue
 		}
 		out[key] = values[0]
@@ -384,4 +469,23 @@ func objectNameFromKey(currentPrefix, key string) string {
 		return parts[len(parts)-1]
 	}
 	return name
+}
+
+func isNotFound(err error) bool {
+	var noSuchKey *s3Types.NoSuchKey
+	if errors.As(err, &noSuchKey) {
+		return true
+	}
+	var notFound *s3Types.NotFound
+	if errors.As(err, &notFound) {
+		return true
+	}
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "NoSuchKey", "NotFound", "404":
+			return true
+		}
+	}
+	return false
 }

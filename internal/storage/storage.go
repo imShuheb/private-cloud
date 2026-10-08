@@ -56,14 +56,27 @@ type DriveStats struct {
 	TotalFolders int   `json:"totalFolders"`
 }
 
+// ErrStopWalk can be returned from a Walk callback to stop early without an error.
+var ErrStopWalk = errors.New("stop walk")
+
 type Store interface {
+	// Ping checks that the bucket is reachable with the configured credentials.
+	Ping(ctx context.Context) error
 	GetStats(ctx context.Context) (DriveStats, error)
 	ListObjects(ctx context.Context, prefix, continuationToken string, limit int32) (ListResult, error)
 	ListBrowser(ctx context.Context, prefix, continuationToken string, limit int32) (BrowserListResult, error)
-	UploadObject(ctx context.Context, key, contentType string, body io.Reader) error
+	// Walk calls fn for every object under prefix, page by page.
+	Walk(ctx context.Context, prefix string, fn func(ObjectInfo) error) error
+	// UploadObject stores body under key; size is the body length, or -1 if unknown.
+	UploadObject(ctx context.Context, key, contentType string, body io.Reader, size int64) error
 	PresignUpload(ctx context.Context, key, contentType string, expires time.Duration) (PresignedRequest, error)
 	DownloadObject(ctx context.Context, key string) (DownloadObject, error)
-	PresignDownload(ctx context.Context, key string, expires time.Duration) (PresignedRequest, error)
+	// ReadRange returns length bytes of key starting at offset (fewer at the end of the object).
+	ReadRange(ctx context.Context, key string, offset, length int64) ([]byte, error)
+	// HeadObject returns size and modification time of key, or ErrNotFound.
+	HeadObject(ctx context.Context, key string) (ObjectInfo, error)
+	// PresignDownload signs a GET; with attachmentName set the browser saves the file under that name.
+	PresignDownload(ctx context.Context, key string, expires time.Duration, attachmentName string) (PresignedRequest, error)
 	DeleteObject(ctx context.Context, key string) error
 	DeleteObjects(ctx context.Context, keys []string) error
 }

@@ -15,6 +15,11 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	}
 }
 
+// writeError sends {"error": message} so clients can show the reason.
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"error": message})
+}
+
 func sanitizeFilename(key string) string {
 	parts := strings.Split(key, "/")
 	name := parts[len(parts)-1]

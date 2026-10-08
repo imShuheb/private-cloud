@@ -1,148 +1,63 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
-import { useEffect, useState } from 'react'
-import { getMe, getConnections, getDriveStats } from './api'
-import type { User } from './types'
-import LoginPage from './pages/LoginPage'
-import DrivePage from './pages/DrivePage'
-import SettingsPage from './pages/SettingsPage'
+import type { ReactNode } from 'react'
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { Spinner } from './components/ui/Button'
+import { homePath, permissionsOf, useAuth } from './context/auth'
+import AuthProvider from './context/AuthProvider'
+import ToastProvider from './context/ToastProvider'
 import ConnectionsPage from './pages/ConnectionsPage'
+import DrivePage from './pages/DrivePage'
+import LoginPage from './pages/LoginPage'
+import SettingsPage from './pages/SettingsPage'
+import StoragePage from './pages/StoragePage'
 
-const APP_TITLE = 'Private Storage'
-const APP_DESCRIPTION = 'Secure personal cloud drive with web, preview, and direct download support.'
+export default function App() {
+  return (
+    <ToastProvider>
+      <AuthProvider>
+        <BrowserRouter>
+          <AppRoutes />
+        </BrowserRouter>
+      </AuthProvider>
+    </ToastProvider>
+  )
+}
 
-function App() {
-  const [checking, setChecking] = useState(true)
-  const [user, setUser] = useState<User | null>(null)
-  const [hasConnections, setHasConnections] = useState<boolean>(false)
+function AppRoutes() {
+  const auth = useAuth()
 
-  useEffect(() => {
-    document.title = APP_TITLE
-
-    let descriptionTag = document.querySelector('meta[name="description"]')
-    if (!descriptionTag) {
-      descriptionTag = document.createElement('meta')
-      descriptionTag.setAttribute('name', 'description')
-      document.head.appendChild(descriptionTag)
-    }
-    descriptionTag.setAttribute('content', APP_DESCRIPTION)
-  }, [])
-
-  useEffect(() => {
-    async function init() {
-      try {
-        const me = await getMe()
-        if (me.authenticated && me.user) {
-          setUser(me.user)
-          if (me.user.permissions?.canManageConnections) {
-            const conns = await getConnections()
-            setHasConnections(conns.connections.length > 0)
-          } else {
-            const stats = await getDriveStats()
-            setHasConnections(stats.isConfigured)
-          }
-        }
-      } catch (err) {
-        console.error('Initial check failed:', err)
-      } finally {
-        setChecking(false)
-      }
-    }
-    init()
-  }, [])
-
-  if (checking) {
+  if (auth.status === 'loading') {
     return (
-      <div className="fixed inset-0 flex flex-col items-center justify-center bg-white z-[100]">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-10 h-10 border-2 border-black border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm font-semibold text-black uppercase tracking-wider">Loading workspace</span>
-        </div>
+      <div className="h-full flex flex-col items-center justify-center gap-4 text-primary bg-app">
+        <span className="icon filled text-[56px]">cloud</span>
+        <Spinner />
       </div>
     )
   }
 
-  const refreshConnections = async () => {
-    try {
-      if (user?.permissions?.canManageConnections) {
-        const conns = await getConnections()
-        setHasConnections(conns.connections.length > 0)
-      } else {
-        const stats = await getDriveStats()
-        setHasConnections(stats.isConfigured)
-      }
-    } catch (e) {
-      setHasConnections(false)
-    }
-  }
-
-  const handleLogin = async (u: User) => {
-    setUser(u)
-    refreshConnections()
-  }
-
-  const homePath = user
-    ? user.permissions?.canManageConnections
-      ? '/connections'
-      : user.permissions?.canManageSettings || user.role === 'owner'
-        ? '/settings'
-        : '/drive'
-    : '/login'
+  const user = auth.status === 'signedIn' ? auth.user : null
+  const perms = user ? permissionsOf(user) : null
 
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route
-          path="/login"
-          element={
-            user ? <Navigate to={homePath} replace /> : <LoginPage onLogin={handleLogin} />
-          }
-        />
-        <Route
-          path="/drive/*"
-          element={
-            user ? (
-              hasConnections ? (
-                <DrivePage user={user} onLogout={() => setUser(null)} />
-              ) : (
-                <Navigate to="/connections" replace />
-              )
-            ) : (
-              <Navigate to="/login" replace />
-            )
-          }
-        />
-        <Route
-          path="/connections"
-          element={
-            user ? (
-              user.permissions?.canManageConnections ? (
-                <ConnectionsPage user={user} onLogout={() => setUser(null)} />
-              ) : (
-                <Navigate to={homePath} replace />
-              )
-            ) : (
-              <Navigate to="/login" replace />
-            )
-          }
-        />
-        <Route
-          path="/settings"
-          element={
-            user ? (
-              user.permissions?.canManageSettings || user.role === 'owner' ? (
-                <SettingsPage user={user} onLogout={() => setUser(null)} />
-              ) : (
-                <Navigate to={homePath} replace />
-              )
-            ) : (
-              <Navigate to="/login" replace />
-            )
-          }
-        />
-        <Route path="*" element={<Navigate to={homePath} replace />} />
-      </Routes>
-    </BrowserRouter>
+    <Routes>
+      <Route path="/login" element={user ? <Navigate to={homePath(user)} replace /> : <LoginPage />} />
+      <Route path="/drive/*" element={<RequireUser>{<DrivePage />}</RequireUser>} />
+      <Route path="/storage" element={<RequireUser>{<StoragePage />}</RequireUser>} />
+      <Route
+        path="/connections"
+        element={<RequireUser allowed={!!perms?.canManageConnections}>{<ConnectionsPage />}</RequireUser>}
+      />
+      <Route path="/settings" element={<RequireUser allowed={!!perms?.canManageSettings}>{<SettingsPage />}</RequireUser>} />
+      <Route path="*" element={<Navigate to={user ? homePath(user) : '/login'} replace />} />
+    </Routes>
   )
 }
 
-export default App
+function RequireUser({ children, allowed = true }: { children: ReactNode; allowed?: boolean }) {
+  const auth = useAuth()
+  const location = useLocation()
+  if (auth.status !== 'signedIn') {
+    return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />
+  }
+  if (!allowed) return <Navigate to={homePath(auth.user)} replace />
+  return <>{children}</>
+}

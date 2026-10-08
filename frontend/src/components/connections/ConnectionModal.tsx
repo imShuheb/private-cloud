@@ -1,198 +1,121 @@
-import { useState, useEffect } from 'react'
-import type { FormEvent } from 'react'
-import type { Connection } from '../../types'
+import { useState, type FormEvent } from 'react'
+import { errorMessage } from '../../api'
+import type { Connection, ConnectionInput } from '../../types'
+import Button from '../ui/Button'
+import Modal from '../ui/Modal'
+import Switch from '../ui/Switch'
+import TextField from '../ui/TextField'
 
 type Props = {
-  isOpen: boolean
+  open: boolean
   onClose: () => void
-  onSave: (conn: Connection) => Promise<void>
-  editingConnection?: Connection | null
+  onSave: (conn: ConnectionInput) => Promise<void>
+  editing: Connection | null
 }
 
-export default function ConnectionModal({ isOpen, onClose, onSave, editingConnection }: Props) {
-  const [loading, setLoading] = useState(false)
+const presets = [
+  { label: 'AWS S3', region: 'us-east-1', endpoint: '', pathStyle: false },
+  { label: 'Cloudflare R2', region: 'auto', endpoint: 'https://<account-id>.r2.cloudflarestorage.com', pathStyle: true },
+  { label: 'MinIO', region: 'us-east-1', endpoint: 'http://localhost:9000', pathStyle: true },
+]
+
+function emptyForm(): ConnectionInput {
+  return { id: `conn-${Date.now()}`, name: '', bucket: '', region: 'us-east-1', endpoint: '', accessKey: '', secretKey: '', usePathStyle: false }
+}
+
+/** The parent mounts this with a key per connection, so the form starts fresh each time. */
+export default function ConnectionModal({ open, onClose, onSave, editing }: Props) {
+  const [form, setForm] = useState<ConnectionInput>(() =>
+    editing ? { ...editing, endpoint: editing.endpoint ?? '', accessKey: '', secretKey: '' } : emptyForm(),
+  )
+  const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
-  const [form, setForm] = useState<Connection>({
-    id: '',
-    name: '',
-    bucket: '',
-    region: 'us-east-1',
-    endpoint: '',
-    accessKey: '',
-    secretKey: '',
-    usePathStyle: true
-  })
+  const set = <K extends keyof ConnectionInput>(key: K, value: ConnectionInput[K]) => setForm((f) => ({ ...f, [key]: value }))
 
-  useEffect(() => {
-    if (editingConnection) {
-      setForm(editingConnection)
-    } else {
-      setForm({
-        id: 'conn-' + Date.now(),
-        name: '',
-        bucket: '',
-        region: 'us-east-1',
-        endpoint: '',
-        accessKey: '',
-        secretKey: '',
-        usePathStyle: true
-      })
-    }
-  }, [editingConnection, isOpen])
-
-  if (!isOpen) return null
-
-  async function handleSubmit(e: FormEvent) {
+  async function submit(e: FormEvent) {
     e.preventDefault()
+    if (!form.bucket.trim()) return setError('Bucket name is required')
+    if (!editing && (!form.accessKey.trim() || !form.secretKey)) return setError('Access key and secret key are required')
+    setSaving(true)
     setError('')
-    setLoading(true)
-
     try {
-      if (!form.name || !form.bucket || !form.accessKey || !form.secretKey) {
-        throw new Error('Please fill in all required fields')
-      }
-      await onSave(form)
+      await onSave({ ...form, name: form.name.trim() || form.bucket.trim() })
       onClose()
-    } catch (err: any) {
-      setError(err.message || 'Failed to save connection')
+    } catch (err) {
+      setError(errorMessage(err, 'Could not save the connection'))
     } finally {
-      setLoading(false)
+      setSaving(false)
     }
   }
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-5 bg-black/50 backdrop-blur-sm animate-in fade-in duration-150">
-      <div className="w-full max-w-2xl max-h-[92vh] overflow-hidden border border-gray-300 bg-white shadow-[0_20px_60px_rgba(0,0,0,0.22)] animate-in zoom-in-95 slide-in-from-bottom-3 duration-200">
-        <div className="px-4 sm:px-6 py-4 border-b border-gray-200 bg-gray-50 flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-base sm:text-lg font-bold text-black tracking-tight">{editingConnection ? 'Edit Connection' : 'Add Connection'}</h2>
-            <p className="text-[11px] sm:text-xs text-gray-600 mt-1 uppercase tracking-wide">Connect an S3-compatible storage target</p>
+    <Modal open={open} onClose={saving ? () => {} : onClose} title={editing ? 'Edit connection' : 'Add storage'} width="lg">
+      <form onSubmit={submit} className="pb-6">
+        {!editing && (
+          <div className="flex flex-wrap gap-2 mb-5">
+            {presets.map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                onClick={() => setForm((f) => ({ ...f, region: p.region, endpoint: p.endpoint, usePathStyle: p.pathStyle }))}
+                className="h-8 px-3 rounded-lg border border-[#747775] text-sm text-ink-2 hover:bg-hover"
+              >
+                {p.label}
+              </button>
+            ))}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex items-center justify-center w-9 h-9 border border-gray-300 text-gray-700 hover:text-black hover:border-black hover:bg-white transition-all"
-            aria-label="Close"
-          >
-            <span className="material-symbols-outlined text-[20px]">close</span>
-          </button>
+        )}
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <TextField label="Display name" value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="Home archive" className="sm:col-span-2" />
+          <TextField label="Bucket" value={form.bucket} onChange={(e) => set('bucket', e.target.value)} mono required className="sm:col-span-2" />
+          <TextField label="Region" value={form.region} onChange={(e) => set('region', e.target.value)} placeholder="us-east-1" />
+          <TextField label="Endpoint (optional)" value={form.endpoint ?? ''} onChange={(e) => set('endpoint', e.target.value)} placeholder="Leave empty for AWS" />
+          <TextField
+            label="Access key ID"
+            value={form.accessKey}
+            onChange={(e) => set('accessKey', e.target.value)}
+            mono
+            autoComplete="off"
+            placeholder={editing?.accessKeyHint ? `Unchanged (${editing.accessKeyHint})` : ''}
+          />
+          <TextField
+            label="Secret access key"
+            type="password"
+            value={form.secretKey}
+            onChange={(e) => set('secretKey', e.target.value)}
+            autoComplete="new-password"
+            placeholder={editing ? 'Unchanged' : ''}
+          />
+        </div>
+        {editing && <p className="text-xs text-ink-3 mt-2">Leave the keys empty to keep the saved ones.</p>}
+
+        <div className="mt-2 border-t border-line-soft">
+          <Switch
+            checked={form.usePathStyle}
+            onChange={(v) => set('usePathStyle', v)}
+            label="Path-style URLs"
+            description="Needed for MinIO and most self-hosted S3 servers"
+          />
         </div>
 
-        <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-5 overflow-y-auto max-h-[calc(92vh-72px)]">
-          {error && (
-            <div className="flex items-center gap-3 p-3 border border-gray-300 bg-gray-100 text-xs sm:text-sm text-black" role="alert">
-              <span className="material-symbols-outlined !text-base">warning</span>
-              <span className="font-medium">{error}</span>
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="sm:col-span-2">
-              <label className="block text-[11px] font-semibold text-gray-600 uppercase tracking-wide mb-1.5">Friendly Name</label>
-              <input
-                type="text"
-                required
-                value={form.name}
-                onChange={e => setForm({ ...form, name: e.target.value })}
-                className="w-full px-3.5 py-2.5 border border-gray-300 bg-white text-sm text-black outline-none transition-all focus:border-black"
-                placeholder="e.g. Home Archive"
-              />
-            </div>
-
-            <div className="sm:col-span-2">
-              <label className="block text-[11px] font-semibold text-gray-600 uppercase tracking-wide mb-1.5">Bucket Name</label>
-              <input
-                type="text"
-                required
-                value={form.bucket}
-                onChange={e => setForm({ ...form, bucket: e.target.value })}
-                className="w-full px-3.5 py-2.5 border border-gray-300 bg-white text-sm text-black font-mono outline-none transition-all focus:border-black"
-                placeholder="my-private-storage"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-semibold text-gray-600 uppercase tracking-wide mb-1.5">Region</label>
-              <input
-                type="text"
-                value={form.region}
-                onChange={e => setForm({ ...form, region: e.target.value })}
-                className="w-full px-3.5 py-2.5 border border-gray-300 bg-white text-sm text-black outline-none transition-all focus:border-black"
-                placeholder="us-east-1"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-semibold text-gray-600 uppercase tracking-wide mb-1.5">Endpoint (Optional)</label>
-              <input
-                type="text"
-                value={form.endpoint}
-                onChange={e => setForm({ ...form, endpoint: e.target.value })}
-                className="w-full px-3.5 py-2.5 border border-gray-300 bg-white text-sm text-black outline-none transition-all focus:border-black"
-                placeholder="https://s3.amazonaws.com"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-semibold text-gray-600 uppercase tracking-wide mb-1.5">Access Key</label>
-              <input
-                type="text"
-                required
-                value={form.accessKey}
-                onChange={e => setForm({ ...form, accessKey: e.target.value })}
-                className="w-full px-3.5 py-2.5 border border-gray-300 bg-white text-sm text-black font-mono outline-none transition-all focus:border-black"
-                placeholder="AKIA..."
-              />
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-semibold text-gray-600 uppercase tracking-wide mb-1.5">Secret Key</label>
-              <input
-                type="password"
-                required
-                value={form.secretKey}
-                onChange={e => setForm({ ...form, secretKey: e.target.value })}
-                className="w-full px-3.5 py-2.5 border border-gray-300 bg-white text-sm text-black outline-none transition-all focus:border-black"
-                placeholder="••••••••••••••••"
-              />
-            </div>
-
-            <div className="sm:col-span-2 flex items-center gap-2.5 p-3 border border-gray-200 bg-gray-50">
-              <input
-                type="checkbox"
-                id="modal-path-style"
-                checked={form.usePathStyle}
-                onChange={e => setForm({ ...form, usePathStyle: e.target.checked })}
-                className="w-4 h-4 border-gray-400 accent-black"
-              />
-              <label htmlFor="modal-path-style" className="text-xs sm:text-sm text-gray-700">Use path-style URLs (MinIO, R2, Wasabi)</label>
-            </div>
+        {error && (
+          <div role="alert" className="mt-3 px-4 py-3 rounded-xl bg-danger-soft text-sm text-danger flex gap-2">
+            <span className="icon text-[18px]">error</span>
+            <span className="break-words min-w-0">{error}</span>
           </div>
+        )}
 
-          <div className="pt-1 flex flex-col-reverse sm:flex-row gap-2.5">
-            <button
-              type="button"
-              onClick={onClose}
-              className="w-full sm:flex-1 py-2.5 border border-gray-300 bg-white hover:border-black text-black font-semibold text-sm transition-all"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full sm:flex-1 py-2.5 border border-black bg-black hover:bg-neutral-900 text-white font-semibold text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {loading ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Saving...
-                </>
-              ) : (editingConnection ? 'Save Changes' : 'Add Connection')}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        <div className="flex justify-end gap-2 mt-6">
+          <Button variant="text" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button type="submit" loading={saving}>
+            {saving ? 'Testing connection…' : editing ? 'Save' : 'Connect'}
+          </Button>
+        </div>
+      </form>
+    </Modal>
   )
 }

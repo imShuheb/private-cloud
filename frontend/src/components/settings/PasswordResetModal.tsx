@@ -1,76 +1,73 @@
-import React, { useEffect, useState } from 'react'
+import { useState, type FormEvent } from 'react'
+import { errorMessage } from '../../api'
+import { MIN_PASSWORD_LENGTH } from '../../lib'
+import Button from '../ui/Button'
+import Modal from '../ui/Modal'
+import TextField from '../ui/TextField'
 
-type PasswordResetModalProps = {
-  isOpen: boolean
+type Props = {
+  open: boolean
   username: string
   onClose: () => void
-  onConfirm: (password: string) => Promise<void> | void
+  onConfirm: (password: string) => Promise<void>
 }
 
-const PasswordResetModal: React.FC<PasswordResetModalProps> = ({
-  isOpen,
-  username,
-  onClose,
-  onConfirm,
-}) => {
+/** Mounted with a key per user so the fields start empty. */
+export default function PasswordResetModal({ open, username, onClose, onConfirm }: Props) {
   const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
 
-  useEffect(() => {
-    if (isOpen) {
-      setPassword('')
-      setConfirmPassword('')
+  const tooShort = password.length > 0 && password.length < MIN_PASSWORD_LENGTH
+  const mismatch = confirm.length > 0 && password !== confirm
+  const canSubmit = password.length >= MIN_PASSWORD_LENGTH && password === confirm
+
+  async function submit(e: FormEvent) {
+    e.preventDefault()
+    if (!canSubmit) return
+    setSaving(true)
+    setError('')
+    try {
+      await onConfirm(password)
+      onClose()
+    } catch (err) {
+      setError(errorMessage(err, 'Could not reset the password'))
+    } finally {
+      setSaving(false)
     }
-  }, [isOpen])
-
-  if (!isOpen) return null
-
-  const canSubmit = password.trim().length > 0 && password === confirmPassword
+  }
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative w-full max-w-md bg-white border border-black overflow-hidden">
-        <div className="px-6 py-6">
-          <h3 className="text-lg font-bold text-black mb-2 uppercase tracking-wide">Reset Password</h3>
-          <p className="text-[14px] text-gray-700 leading-relaxed mb-4">Set a new password for {username}.</p>
-
-          <div className="space-y-3">
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="New password"
-              className="w-full px-3 py-2 border border-gray-300 bg-white text-sm outline-none focus:border-black"
-            />
-            <input
-              type="password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="Confirm password"
-              className="w-full px-3 py-2 border border-gray-300 bg-white text-sm outline-none focus:border-black"
-            />
-            {confirmPassword && password !== confirmPassword && (
-              <div className="text-xs font-semibold text-black">Passwords do not match.</div>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center justify-end gap-3 px-6 py-4 bg-white border-t border-black">
-          <button className="px-4 py-2 text-[13px] font-semibold text-black border border-black" onClick={onClose}>
+    <Modal open={open} onClose={saving ? () => {} : onClose} title={`Reset password for ${username}`} width="sm">
+      <form onSubmit={submit} className="pb-6 space-y-4">
+        <p className="text-sm text-ink-2">{username} will be signed out everywhere and must use the new password.</p>
+        <TextField
+          label="New password"
+          type="password"
+          autoComplete="new-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          hint={tooShort ? `At least ${MIN_PASSWORD_LENGTH} characters` : undefined}
+        />
+        <TextField
+          label="Confirm password"
+          type="password"
+          autoComplete="new-password"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          hint={mismatch ? 'Passwords don’t match' : undefined}
+        />
+        {error && <p className="text-sm text-danger">{error}</p>}
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="text" onClick={onClose} disabled={saving}>
             Cancel
-          </button>
-          <button
-            className="px-5 py-2 text-[13px] font-bold text-white border border-black bg-black disabled:opacity-50"
-            onClick={() => canSubmit && onConfirm(password.trim())}
-            disabled={!canSubmit}
-          >
-            Save Password
-          </button>
+          </Button>
+          <Button type="submit" loading={saving} disabled={!canSubmit}>
+            Reset password
+          </Button>
         </div>
-      </div>
-    </div>
+      </form>
+    </Modal>
   )
 }
-
-export default PasswordResetModal

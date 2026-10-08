@@ -1,328 +1,266 @@
-import React, { useState } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { createUser, deleteUser, errorMessage, listUsers, resetUserPassword, updateUserActive, updateUserPermissions } from '../../api'
+import { useUser } from '../../context/auth'
+import { useToast } from '../../context/toast'
+import { MIN_PASSWORD_LENGTH, cx } from '../../lib'
 import type { ManagedUser, UserPermissions } from '../../types'
-import ConfirmModal from '../drive/ConfirmModal'
+import Card from '../analytics/Card'
+import Button, { IconButton, Spinner } from '../ui/Button'
+import ConfirmDialog from '../ui/ConfirmDialog'
+import Menu from '../ui/Menu'
+import Modal from '../ui/Modal'
+import Switch from '../ui/Switch'
+import TextField from '../ui/TextField'
+import PasswordResetModal from './PasswordResetModal'
 
-type UsersAccessSectionProps = {
-  users: ManagedUser[]
-  usersLoading: boolean
-  creatingUser: boolean
-  savingPermissionsUserId: number | null
-  deletingUserId: number | null
-  onCreateUser: (username: string, password: string, permissions: UserPermissions) => Promise<void> | void
-  onSavePermissions: (target: ManagedUser, permissions: UserPermissions) => Promise<void> | void
-  onActiveToggle: (target: ManagedUser, isActive: boolean) => Promise<void> | void
-  onDeleteUser: (target: ManagedUser) => Promise<void> | void
-  onOpenResetPassword: (target: ManagedUser) => void
-}
-
-const permissionOptions: Array<{ key: keyof UserPermissions; label: string }> = [
-  { key: 'canUseSftp', label: 'Allow SFTP login' },
-  { key: 'canReadFiles', label: 'Read files' },
-  { key: 'canWriteFiles', label: 'Write files' },
-  { key: 'canManageConnections', label: 'Manage connections' },
-  { key: 'canManageSettings', label: 'Manage settings' },
+const permissionOptions: Array<{ key: keyof UserPermissions; label: string; description: string }> = [
+  { key: 'canReadFiles', label: 'View files', description: 'Browse, search, preview and download' },
+  { key: 'canWriteFiles', label: 'Edit files', description: 'Upload, create folders and delete' },
+  { key: 'canUseSftp', label: 'SFTP login', description: 'Sign in over SFTP with the same rights' },
+  { key: 'canManageConnections', label: 'Manage connections', description: 'Add, change and switch storage' },
+  { key: 'canManageSettings', label: 'Manage settings', description: 'Change server settings such as SFTP' },
 ]
 
-function toSelectedKeys(permissions: UserPermissions): string[] {
-  return permissionOptions.filter((opt) => permissions[opt.key]).map((opt) => opt.key)
+const defaultPermissions: UserPermissions = {
+  canReadFiles: true,
+  canWriteFiles: true,
+  canUseSftp: true,
+  canManageConnections: false,
+  canManageSettings: false,
 }
 
-function toPermissions(selectedKeys: string[]): UserPermissions {
-  const selectedSet = new Set(selectedKeys)
-  return {
-    canReadFiles: selectedSet.has('canReadFiles'),
-    canWriteFiles: selectedSet.has('canWriteFiles'),
-    canManageConnections: selectedSet.has('canManageConnections'),
-    canManageSettings: selectedSet.has('canManageSettings'),
-    canUseSftp: selectedSet.has('canUseSftp'),
-  }
-}
+type Dialog =
+  | { kind: 'none' }
+  | { kind: 'create' }
+  | { kind: 'edit'; user: ManagedUser }
+  | { kind: 'reset'; user: ManagedUser }
+  | { kind: 'delete'; user: ManagedUser }
 
-const UsersAccessSection: React.FC<UsersAccessSectionProps> = ({
-  users,
-  usersLoading,
-  creatingUser,
-  savingPermissionsUserId,
-  deletingUserId,
-  onCreateUser,
-  onSavePermissions,
-  onActiveToggle,
-  onDeleteUser,
-  onOpenResetPassword,
-}) => {
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
-  const [createUsername, setCreateUsername] = useState('')
-  const [createPassword, setCreatePassword] = useState('')
-  const [createSelectedKeys, setCreateSelectedKeys] = useState<string[]>([
-    'canUseSftp',
-    'canReadFiles',
-    'canWriteFiles',
-  ])
-  const [editTarget, setEditTarget] = useState<ManagedUser | null>(null)
-  const [editSelectedKeys, setEditSelectedKeys] = useState<string[]>([])
-  const [editIsActive, setEditIsActive] = useState(true)
-  const [deletingTarget, setDeletingTarget] = useState<ManagedUser | null>(null)
-  const [savingEdit, setSavingEdit] = useState(false)
+export default function UsersAccessSection() {
+  const me = useUser()
+  const toast = useToast()
+  const [users, setUsers] = useState<ManagedUser[] | null>(null)
+  const [loadError, setLoadError] = useState('')
+  const [dialog, setDialog] = useState<Dialog>({ kind: 'none' })
+  const [dialogKey, setDialogKey] = useState(0)
 
-  function getPermissionLabels(permissions: UserPermissions): string[] {
-    return permissionOptions.filter((opt) => permissions[opt.key]).map((opt) => opt.label)
-  }
-
-  function openEditModal(user: ManagedUser) {
-    setEditTarget(user)
-    setEditSelectedKeys(toSelectedKeys(user.permissions))
-    setEditIsActive(user.isActive)
-  }
-
-  function toggleEditPermission(permissionKey: string) {
-    setEditSelectedKeys((prev) =>
-      prev.includes(permissionKey) ? prev.filter((k) => k !== permissionKey) : [...prev, permissionKey]
-    )
-  }
-
-  function toggleCreatePermission(permissionKey: string) {
-    setCreateSelectedKeys((prev) =>
-      prev.includes(permissionKey) ? prev.filter((k) => k !== permissionKey) : [...prev, permissionKey]
-    )
-  }
-
-  async function handleCreateSubmit() {
-    if (!createUsername.trim() || !createPassword.trim()) return
-    await onCreateUser(createUsername.trim(), createPassword, toPermissions(createSelectedKeys))
-    setCreateUsername('')
-    setCreatePassword('')
-    setCreateSelectedKeys(['canUseSftp', 'canReadFiles', 'canWriteFiles'])
-    setIsCreateModalOpen(false)
-  }
-
-  async function handleSaveEdit() {
-    if (!editTarget || editTarget.role === 'owner') return
-    setSavingEdit(true)
+  const load = useCallback(async () => {
     try {
-      if (editTarget.isActive !== editIsActive) {
-        await onActiveToggle(editTarget, editIsActive)
-      }
-      await onSavePermissions(editTarget, toPermissions(editSelectedKeys))
-      setEditTarget(null)
-    } finally {
-      setSavingEdit(false)
+      setUsers(await listUsers())
+      setLoadError('')
+    } catch (err) {
+      setLoadError(errorMessage(err, 'Could not load users'))
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const open = (next: Dialog) => {
+    setDialogKey((k) => k + 1)
+    setDialog(next)
+  }
+  const close = () => setDialog({ kind: 'none' })
+
+  async function toggleActive(user: ManagedUser) {
+    try {
+      await updateUserActive(user.id, !user.isActive)
+      toast.show(user.isActive ? `${user.username} disabled and signed out` : `${user.username} enabled`)
+      await load()
+    } catch (err) {
+      toast.error(errorMessage(err, 'Could not update the user'))
     }
   }
 
   return (
-    <section className="p-3 sm:p-4 md:p-5 border border-gray-300 bg-white">
-      <div className="flex items-start justify-between gap-3 mb-4">
-        <div>
-          <h2 className="text-base sm:text-lg font-bold text-black uppercase tracking-wide">Users</h2>
-          <p className="text-xs text-gray-700 mt-1">Manage users with clean row actions for edit, reset, and delete.</p>
-        </div>
-        <button
-          onClick={() => setIsCreateModalOpen(true)}
-          className="px-4 py-2 text-sm font-bold text-white bg-black border border-black"
-        >
-          Create User
-        </button>
-      </div>
-
-      {usersLoading ? (
-        <div className="h-16 border border-gray-200 bg-gray-50 animate-pulse" />
-      ) : (
-        <div className="border border-gray-300 overflow-x-auto">
-          <table className="w-full min-w-190 text-sm">
-            <thead className="bg-gray-50 border-b border-gray-300">
-              <tr>
-                <th className="text-left px-3 py-2 font-bold">User</th>
-                <th className="text-left px-3 py-2 font-bold">Role</th>
-                <th className="text-left px-3 py-2 font-bold">Status</th>
-                <th className="text-left px-3 py-2 font-bold">Permissions</th>
-                <th className="text-right px-3 py-2 font-bold">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((u) => {
-                const labels = getPermissionLabels(u.permissions)
-                return (
-                  <tr key={u.id} className="border-b border-gray-200">
-                    <td className="px-3 py-2">
-                      <div className="font-semibold text-black">{u.username}</div>
-                    </td>
-                    <td className="px-3 py-2 uppercase text-xs tracking-wide">
-                      {u.role}
-                    </td>
-                    <td className="px-3 py-2">
-                      <span className={`px-2 py-1 text-[11px] font-bold border ${u.isActive ? 'border-black text-black' : 'border-gray-300 text-gray-600'}`}>
-                        {u.isActive ? 'Active' : 'Disabled'}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex flex-wrap gap-1">
-                        {labels.length === 0 ? (
-                          <span className="text-xs text-gray-500">No permissions</span>
-                        ) : (
-                          labels.map((label) => (
-                            <span key={label} className="px-2 py-0.5 text-[11px] border border-gray-300">
-                              {label}
-                            </span>
-                          ))
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => openEditModal(u)}
-                          disabled={u.role === 'owner'}
-                          className="px-2.5 py-1.5 text-[11px] font-bold border border-gray-300 disabled:opacity-50"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => onOpenResetPassword(u)}
-                          className="px-2.5 py-1.5 text-[11px] font-bold border border-gray-300"
-                        >
-                          Reset
-                        </button>
-                        <button
-                          onClick={() => setDeletingTarget(u)}
-                          disabled={u.role === 'owner' || deletingUserId === u.id}
-                          className="px-2.5 py-1.5 text-[11px] font-bold border border-black text-black disabled:opacity-50"
-                        >
-                          {deletingUserId === u.id ? 'Deleting...' : 'Delete'}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+    <Card
+      title="Users"
+      subtitle="The owner has every permission. Changes apply immediately, even to signed-in users."
+      actions={<Button icon="person_add" onClick={() => open({ kind: 'create' })}>Add user</Button>}
+    >
+      {loadError && <p className="text-sm text-danger">{loadError}</p>}
+      {!users && !loadError && (
+        <div className="flex justify-center py-10 text-primary">
+          <Spinner />
         </div>
       )}
-
-      {isCreateModalOpen && (
-        <div className="fixed inset-0 z-100 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setIsCreateModalOpen(false)} />
-          <div className="relative w-full max-w-md bg-white border border-black overflow-hidden">
-            <div className="px-6 py-5">
-              <h3 className="text-lg font-bold uppercase tracking-wide">Create User</h3>
-              <div className="mt-4 space-y-3">
-                <input
-                  value={createUsername}
-                  onChange={(e) => setCreateUsername(e.target.value)}
-                  placeholder="username"
-                  className="w-full px-3 py-2 border border-gray-300 bg-white text-sm outline-none focus:border-black"
-                />
-                <input
-                  type="password"
-                  value={createPassword}
-                  onChange={(e) => setCreatePassword(e.target.value)}
-                  placeholder="password"
-                  className="w-full px-3 py-2 border border-gray-300 bg-white text-sm outline-none focus:border-black"
-                />
-
-                <div>
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-600 mb-2">Permissions</div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    {permissionOptions.map((opt) => {
-                      const checked = createSelectedKeys.includes(opt.key)
-                      return (
-                        <button
-                          key={opt.key}
-                          type="button"
-                          onClick={() => toggleCreatePermission(opt.key)}
-                          className={`flex items-center justify-between px-3 py-2 border text-sm ${checked ? 'border-black bg-gray-100' : 'border-gray-300 bg-white'}`}
-                        >
-                          <span>{opt.label}</span>
-                          <span className="text-xs font-bold">{checked ? 'ON' : 'OFF'}</span>
-                        </button>
-                      )
-                    })}
+      {users && (
+        <ul className="divide-y divide-line-soft -mx-2">
+          {users.map((u) => {
+            const isOwner = u.role === 'owner'
+            const granted = permissionOptions.filter((o) => u.permissions[o.key])
+            return (
+              <li key={u.id} className="flex items-center gap-4 px-2 py-3">
+                <span className={cx('w-10 h-10 rounded-full flex items-center justify-center font-display font-medium shrink-0', u.isActive ? 'bg-primary text-white' : 'bg-raised text-ink-3')}>
+                  {u.username.charAt(0).toUpperCase()}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-medium text-ink truncate">{u.username}</span>
+                    {u.id === me.id && <span className="text-xs text-ink-3">(you)</span>}
+                    {isOwner && <span className="px-2 py-0.5 rounded-full bg-primary-soft text-on-primary-soft text-xs font-medium">Owner</span>}
+                    {!u.isActive && <span className="px-2 py-0.5 rounded-full bg-raised text-ink-2 text-xs font-medium">Disabled</span>}
+                  </div>
+                  <div className="text-xs text-ink-3 mt-0.5 truncate">
+                    {isOwner ? 'All permissions' : granted.length ? granted.map((o) => o.label).join(' · ') : 'No permissions'}
                   </div>
                 </div>
-              </div>
-            </div>
-            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-black">
-              <button className="px-4 py-2 text-[13px] font-semibold border border-black" onClick={() => setIsCreateModalOpen(false)}>
-                Cancel
-              </button>
-              <button
-                className="px-5 py-2 text-[13px] font-bold text-white border border-black bg-black disabled:opacity-50"
-                disabled={creatingUser || !createUsername.trim() || !createPassword.trim()}
-                onClick={() => void handleCreateSubmit()}
-              >
-                {creatingUser ? 'Creating...' : 'Create User'}
-              </button>
-            </div>
-          </div>
-        </div>
+                <Menu
+                  trigger={({ toggle }) => <IconButton icon="more_vert" label={`Actions for ${u.username}`} onClick={toggle} />}
+                  items={[
+                    { label: 'Edit permissions', icon: 'tune', disabled: isOwner, onSelect: () => open({ kind: 'edit', user: u }) },
+                    { label: 'Reset password', icon: 'key', onSelect: () => open({ kind: 'reset', user: u }) },
+                    { label: u.isActive ? 'Disable' : 'Enable', icon: u.isActive ? 'person_off' : 'person_check', disabled: isOwner, onSelect: () => void toggleActive(u) },
+                    'divider',
+                    { label: 'Delete user', icon: 'delete', danger: true, disabled: isOwner, onSelect: () => open({ kind: 'delete', user: u }) },
+                  ]}
+                />
+              </li>
+            )
+          })}
+        </ul>
       )}
 
-      {editTarget && (
-        <div className="fixed inset-0 z-100 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setEditTarget(null)} />
-          <div className="relative w-full max-w-xl bg-white border border-black overflow-hidden">
-            <div className="px-6 py-5">
-              <h3 className="text-lg font-bold uppercase tracking-wide">Edit User: {editTarget.username}</h3>
-
-              <div className="mt-4 grid gap-4">
-                <label className="flex items-center justify-between border border-gray-300 px-3 py-2">
-                  <span className="text-sm font-semibold">User Active</span>
-                  <input type="checkbox" checked={editIsActive} onChange={(e) => setEditIsActive(e.target.checked)} />
-                </label>
-
-                <div>
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-600 mb-2">Permissions</div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    {permissionOptions.map((opt) => {
-                      const checked = editSelectedKeys.includes(opt.key)
-                      return (
-                        <button
-                          key={opt.key}
-                          type="button"
-                          onClick={() => toggleEditPermission(opt.key)}
-                          className={`flex items-center justify-between px-3 py-2 border text-sm ${checked ? 'border-black bg-gray-100' : 'border-gray-300 bg-white'}`}
-                        >
-                          <span>{opt.label}</span>
-                          <span className="text-xs font-bold">{checked ? 'ON' : 'OFF'}</span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-black">
-              <button className="px-4 py-2 text-[13px] font-semibold border border-black" onClick={() => setEditTarget(null)}>
-                Cancel
-              </button>
-              <button
-                className="px-5 py-2 text-[13px] font-bold text-white border border-black bg-black disabled:opacity-50"
-                disabled={savingEdit || savingPermissionsUserId === editTarget.id}
-                onClick={() => void handleSaveEdit()}
-              >
-                {savingEdit || savingPermissionsUserId === editTarget.id ? 'Saving...' : 'Save Changes'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <ConfirmModal
-        isOpen={!!deletingTarget}
-        onClose={() => setDeletingTarget(null)}
-        onConfirm={() => {
-          if (deletingTarget) {
-            void onDeleteUser(deletingTarget)
+      <CreateUserModal key={`c${dialogKey}`} open={dialog.kind === 'create'} onClose={close} onCreated={load} />
+      {dialog.kind === 'edit' && <EditPermissionsModal key={`e${dialogKey}`} user={dialog.user} onClose={close} onSaved={load} />}
+      <PasswordResetModal
+        key={`r${dialogKey}`}
+        open={dialog.kind === 'reset'}
+        username={dialog.kind === 'reset' ? dialog.user.username : ''}
+        onClose={close}
+        onConfirm={async (password) => {
+          if (dialog.kind !== 'reset') return
+          await resetUserPassword(dialog.user.id, password)
+          toast.show(`Password reset for ${dialog.user.username}`, { tone: 'success' })
+        }}
+      />
+      <ConfirmDialog
+        open={dialog.kind === 'delete'}
+        title={`Delete ${dialog.kind === 'delete' ? dialog.user.username : ''}?`}
+        message="The account is removed and signed out everywhere. Files they uploaded stay in storage."
+        confirmLabel="Delete"
+        danger
+        onClose={close}
+        onConfirm={async () => {
+          if (dialog.kind !== 'delete') return
+          try {
+            await deleteUser(dialog.user.id)
+            toast.show(`${dialog.user.username} deleted`)
+            await load()
+          } catch (err) {
+            toast.error(errorMessage(err, 'Could not delete the user'))
+            throw err
           }
         }}
-        title="Delete User"
-        message={deletingTarget ? `Delete ${deletingTarget.username}? This action cannot be undone.` : ''}
-        confirmText="Delete"
-        cancelText="Cancel"
-        isDangerous={true}
       />
-    </section>
+    </Card>
   )
 }
 
-export default UsersAccessSection
+function PermissionSwitches({ value, onChange }: { value: UserPermissions; onChange: (v: UserPermissions) => void }) {
+  return (
+    <div className="divide-y divide-line-soft">
+      {permissionOptions.map((o) => (
+        <Switch key={o.key} label={o.label} description={o.description} checked={value[o.key]} onChange={(v) => onChange({ ...value, [o.key]: v })} />
+      ))}
+    </div>
+  )
+}
+
+function CreateUserModal({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => Promise<void> }) {
+  const toast = useToast()
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [perms, setPerms] = useState<UserPermissions>(defaultPermissions)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  async function submit(e: FormEvent) {
+    e.preventDefault()
+    if (!username.trim()) return setError('Enter a username')
+    if (password.length < MIN_PASSWORD_LENGTH) return setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`)
+    setSaving(true)
+    setError('')
+    try {
+      const created = await createUser(username.trim(), password)
+      if (created.role !== 'owner') await updateUserPermissions(created.id, perms)
+      toast.show(`${created.username} added`, { tone: 'success' })
+      await onCreated()
+      onClose()
+    } catch (err) {
+      setError(errorMessage(err, 'Could not create the user'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={saving ? () => {} : onClose} title="Add user">
+      <form onSubmit={submit} className="pb-6 space-y-4">
+        <TextField label="Username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" />
+        <TextField
+          label="Password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          autoComplete="new-password"
+          hint={`At least ${MIN_PASSWORD_LENGTH} characters`}
+        />
+        <div>
+          <div className="text-xs font-medium text-ink-2 mt-2">Permissions</div>
+          <PermissionSwitches value={perms} onChange={setPerms} />
+        </div>
+        {error && <p className="text-sm text-danger">{error}</p>}
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="text" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button type="submit" loading={saving}>
+            Add user
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+function EditPermissionsModal({ user, onClose, onSaved }: { user: ManagedUser; onClose: () => void; onSaved: () => Promise<void> }) {
+  const toast = useToast()
+  const [perms, setPerms] = useState<UserPermissions>(user.permissions)
+  const [saving, setSaving] = useState(false)
+
+  async function save() {
+    setSaving(true)
+    try {
+      await updateUserPermissions(user.id, perms)
+      toast.show(`Permissions updated for ${user.username}`, { tone: 'success' })
+      await onSaved()
+      onClose()
+    } catch (err) {
+      toast.error(errorMessage(err, 'Could not update permissions'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={saving ? () => {} : onClose}
+      title={`Permissions for ${user.username}`}
+      footer={
+        <>
+          <Button variant="text" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button onClick={save} loading={saving}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <PermissionSwitches value={perms} onChange={setPerms} />
+    </Modal>
+  )
+}
