@@ -19,8 +19,8 @@ type Props = ItemActions & {
 }
 
 /**
- * List or grid with Drive-style selection: click, Ctrl/Cmd-click, Shift-click, Ctrl/Cmd+A,
- * Escape to clear and Delete/Backspace to delete the selection.
+ * List or grid. Clicking an item opens it; the checkbox, Ctrl/Cmd-click, Shift-click and
+ * Ctrl/Cmd+A select. Escape clears the selection and Delete/Backspace deletes it.
  */
 export default function FileList({
   items,
@@ -39,21 +39,19 @@ export default function FileList({
   const selectionMode = selected.size > 0
   const allSelected = items.length > 0 && items.every((i) => selected.has(i.key))
 
+  /** A plain click opens the item; Shift and Ctrl/Cmd clicks select instead. */
   function select(item: DriveItem, e: MouseEvent) {
-    if (!canSelect) return
     const keys = items.map((i) => i.key)
-    if (e.shiftKey && anchor.current && keys.includes(anchor.current)) {
+    if (canSelect && e.shiftKey && anchor.current && keys.includes(anchor.current)) {
       const [a, b] = [keys.indexOf(anchor.current), keys.indexOf(item.key)].sort((x, y) => x - y)
       onSelectionChange(new Set(keys.slice(a, b + 1)))
       return
     }
-    anchor.current = item.key
-    if (e.metaKey || e.ctrlKey || selectionMode) {
-      // Once something is selected, a plain click adds or removes (handy on touch screens)
+    if (canSelect && (e.metaKey || e.ctrlKey || e.shiftKey)) {
       toggle(item)
       return
     }
-    onSelectionChange(new Set([item.key]))
+    actions.onOpen(item)
   }
 
   function toggle(item: DriveItem) {

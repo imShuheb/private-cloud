@@ -36,7 +36,6 @@ function SelectBox({ item, selected, selectionMode, onToggle, iconClass, icon }:
         e.stopPropagation()
         onToggle(item)
       }}
-      onDoubleClick={(e) => e.stopPropagation()}
       className="relative w-8 h-8 -ml-1.5 rounded-full flex items-center justify-center shrink-0 hover:bg-press"
     >
       <span
@@ -63,7 +62,7 @@ function SelectBox({ item, selected, selectionMode, onToggle, iconClass, icon }:
 
 function RowMenu({ item, actions, className }: { item: DriveItem; actions: ItemActions; className?: string }) {
   return (
-    <div onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()} className={className}>
+    <div onClick={(e) => e.stopPropagation()} className={className}>
       <Menu
         trigger={({ toggle, open }) => (
           <button
@@ -83,7 +82,7 @@ function RowMenu({ item, actions, className }: { item: DriveItem; actions: ItemA
   )
 }
 
-/** One row of the list view. Click selects, double click (or Enter) opens. */
+/** One row of the list view. Click (or Enter) opens; the checkbox (or Space) selects. */
 export default function FileRow({ item, selected, selectionMode, showLocation, canSelect, onSelect, onToggle, ...actions }: RowProps) {
   const icon = itemIcon(item)
   const details = item.kind === 'file' ? `${formatBytes(item.size)} · ${formatDate(item.lastModified)}` : 'Folder'
@@ -94,7 +93,6 @@ export default function FileRow({ item, selected, selectionMode, showLocation, c
       aria-selected={selected}
       tabIndex={0}
       onClick={(e) => onSelect(item, e)}
-      onDoubleClick={() => actions.onOpen(item)}
       onKeyDown={keyHandler(item, canSelect, onToggle, actions.onOpen)}
       className={cx(
         'group grid items-center gap-4 min-h-12 py-1 px-4 sm:px-6 border-b border-line-soft cursor-default select-none outline-none transition-colors',
@@ -152,7 +150,6 @@ export function FileCard({ item, selected, selectionMode, canSelect, onSelect, o
     'aria-selected': selected,
     tabIndex: 0,
     onClick: (e: MouseEvent) => onSelect(item, e),
-    onDoubleClick: () => actions.onOpen(item),
     onKeyDown: keyHandler(item, canSelect, onToggle, actions.onOpen),
   }
   const box = canSelect ? (
