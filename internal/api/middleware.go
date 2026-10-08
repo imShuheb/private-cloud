@@ -30,20 +30,40 @@ type principal struct {
 
 type principalContextKey struct{}
 
+// sessionPrincipal resolves the session cookie to the user's current role and permissions.
+// The user is re-read on every request, so disabling a user or changing their permissions
+// takes effect immediately instead of when the session expires.
+func (s *Server) sessionPrincipal(r *http.Request) (principal, bool) {
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		return principal{}, false
+	}
+	session, ok := s.sm.get(cookie.Value)
+	if !ok {
+		return principal{}, false
+	}
+
+	s.mu.RLock()
+	user, err := s.cfg.GetUserByID(session.userID)
+	s.mu.RUnlock()
+	if err != nil || user == nil || !user.IsActive {
+		s.sm.delete(cookie.Value)
+		return principal{}, false
+	}
+
+	return principal{
+		userID:   user.ID,
+		username: user.Username,
+		role:     user.Role,
+		perms:    user.Permissions,
+	}, true
+}
+
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if cookie, err := r.Cookie(sessionCookieName); err == nil {
-			session, ok := s.sm.get(cookie.Value)
-			if ok {
-				p := principal{
-					userID:   session.userID,
-					username: session.username,
-					role:     session.role,
-					perms:    session.perms,
-				}
-				next.ServeHTTP(w, withPrincipal(r, p))
-				return
-			}
+		if p, ok := s.sessionPrincipal(r); ok {
+			next.ServeHTTP(w, withPrincipal(r, p))
+			return
 		}
 
 		bearer := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
@@ -54,7 +74,7 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		s.mu.RUnlock()
 
 		if !isMatchingAPIKey(adminAPIKey, bearer) && !isMatchingAPIKey(adminAPIKey, xAPIKey) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 
@@ -90,11 +110,11 @@ func requireOwner(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := principalFromRequest(r)
 		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		if p.role != appconfig.RoleOwner {
-			http.Error(w, "forbidden", http.StatusForbidden)
+			writeError(w, http.StatusForbidden, "forbidden")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -105,7 +125,7 @@ func requirePerm(perm permissionKey, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := principalFromRequest(r)
 		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 
@@ -122,7 +142,7 @@ func requirePerm(perm permissionKey, next http.Handler) http.Handler {
 		}
 
 		if !allowed {
-			http.Error(w, "forbidden", http.StatusForbidden)
+			writeError(w, http.StatusForbidden, "forbidden")
 			return
 		}
 
@@ -151,6 +171,16 @@ func isSecureRequest(r *http.Request) bool {
 		return true
 	}
 	return false
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "same-origin")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {

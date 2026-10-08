@@ -25,7 +25,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var req updateSettingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 
@@ -34,7 +34,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		addr = "0.0.0.0:2022"
 	}
 	if _, _, err := net.SplitHostPort(addr); err != nil {
-		http.Error(w, "sftp address must be in host:port format", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "sftp address must be in host:port format")
 		return
 	}
 
@@ -48,13 +48,13 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.cfg.Save(); err != nil {
 		s.mu.Unlock()
-		http.Error(w, "failed to persist settings", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "failed to persist settings")
 		return
 	}
 	s.mu.Unlock()
 
 	if err := s.applySFTPFromConfig(); err != nil {
-		http.Error(w, "failed to apply SFTP settings: "+err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "failed to apply SFTP settings: "+err.Error())
 		return
 	}
 

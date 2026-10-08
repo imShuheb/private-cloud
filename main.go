@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"private-storage/internal/api"
@@ -20,7 +23,9 @@ func main() {
 		log.Fatalf("config error: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	var store storage.Store
 	activeConn := cfg.GetActiveConnection()
 
@@ -42,7 +47,7 @@ func main() {
 
 	httpServer := &http.Server{
 		Addr:              cfg.ServerAddr,
-		Handler:           api.NewHandler(store, cfg),
+		Handler:           api.NewHandler(ctx, store, cfg),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      120 * time.Second,
@@ -55,15 +60,27 @@ func main() {
 	} else if activeConn != nil {
 		log.Printf("Active Storage: %s (Bucket: %s)", activeConn.Name, activeConn.Bucket)
 	}
-	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
-		log.Printf("HTTPS enabled with cert %s", cfg.TLSCertFile)
-		if err := httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && err != http.ErrServerClosed {
+	serveErr := make(chan error, 1)
+	go func() {
+		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+			log.Printf("HTTPS enabled with cert %s", cfg.TLSCertFile)
+			serveErr <- httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+			return
+		}
+		serveErr <- httpServer.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serveErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("server error: %v", err)
 		}
-		return
-	}
-
-	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("server error: %v", err)
+	case <-ctx.Done():
+		log.Println("Shutting down...")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("shutdown: %v", err)
+		}
 	}
 }

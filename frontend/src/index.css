@@ -1,62 +1,194 @@
 @import "tailwindcss";
 
+/* Google Drive-inspired tokens (light). */
 @theme {
-  --font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-  --font-display: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-  
-  --color-ps-bg: #ffffff;
-  --color-ps-primary: #000000;
-  --color-ps-primary-hover: #1f1f1f;
-  --color-ps-border: #d4d4d4;
-  --color-ps-border-light: #e5e5e5;
+  --font-sans: 'Google Sans', 'Roboto', system-ui, -apple-system, 'Segoe UI', Arial, sans-serif;
+  --font-body: 'Roboto', system-ui, -apple-system, 'Segoe UI', Arial, sans-serif;
+
+  --color-app: #f8fafd;
+  --color-surface: #ffffff;
+  --color-raised: #f0f4f9;
+  --color-hover: #e9eef6;
+  --color-press: #dde3ea;
+
+  --color-ink: #1f1f1f;
+  --color-ink-2: #444746;
+  --color-ink-3: #5e5e5e;
+
+  --color-line: #c4c7c5;
+  --color-line-soft: #e1e3e1;
+
+  --color-primary: #0b57d0;
+  --color-primary-hover: #0842a0;
+  --color-primary-soft: #c2e7ff;
+  --color-on-primary-soft: #001d35;
+  --color-selected: #c2e7ff;
+
+  --color-danger: #b3261e;
+  --color-danger-soft: #f9dedc;
+  --color-success: #146c2e;
+  --color-success-soft: #c4eed0;
+  --color-warning-soft: #ffefc9;
+
+  /* Data-viz categorical slots (validated: adjacent CVD ΔE ≥ 9.1, normal-vision ΔE ≥ 19.6 on white) */
+  --color-cat-video: #2a78d6;
+  --color-cat-image: #eb6834;
+  --color-cat-audio: #1baf7a;
+  --color-cat-document: #eda100;
+  --color-cat-archive: #e87ba4;
+  --color-cat-code: #008300;
+  --color-cat-other: #4a3aa7;
+  --color-series: #2a78d6;
+
+  --shadow-card: 0 1px 2px 0 rgb(60 64 67 / 0.3), 0 1px 3px 1px rgb(60 64 67 / 0.15);
+  --shadow-menu: 0 2px 6px 2px rgb(60 64 67 / 0.15), 0 1px 2px 0 rgb(60 64 67 / 0.3);
+  --shadow-raised: 0 4px 8px 3px rgb(60 64 67 / 0.15), 0 1px 3px 0 rgb(60 64 67 / 0.3);
 }
 
-/* ============================================================
-   Global Reset & Heights
-   ============================================================ */
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
 }
 
 body {
   margin: 0;
-  font-family: var(--font-family);
-  background-color: #ffffff;
-  color: #111111;
+  font-family: var(--font-body);
+  background-color: var(--color-app);
+  color: var(--color-ink);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* ---- Material Symbols config ---- */
-.material-symbols-outlined {
-  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-  user-select: none;
-  vertical-align: middle;
+h1,
+h2,
+h3,
+.font-display {
+  font-family: var(--font-sans);
 }
 
-.material-symbols-outlined.filled {
-  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
-/* File Icon Colors */
-.file-icon-img { color: #d93025; }
-.file-icon-video { color: #d93025; }
-.file-icon-audio { color: #f9ab00; }
-.file-icon-doc { color: #4285f4; }
-.file-icon-sheet { color: #0f9d58; }
-.file-icon-pdf { color: #d93025; }
-.file-icon-zip { color: #5f6368; }
-.file-icon-code { color: #4285f4; }
-.file-icon-default { color: #5f6368; }
+/* Text fields show focus with their own border, so skip the extra outline */
+input:not([type='checkbox']):not([type='radio']):focus-visible,
+textarea:focus-visible {
+  outline: none;
+}
 
-/* Custom Animations */
+/* In a layer so Tailwind utilities (text-[32px], text-primary, …) can override them */
+@layer components {
+  /* Material Symbols */
+  .icon {
+    font-family: 'Material Symbols Outlined';
+    font-weight: normal;
+    font-style: normal;
+    font-size: 20px;
+    line-height: 1;
+    display: inline-block;
+    white-space: nowrap;
+    direction: ltr;
+    font-feature-settings: 'liga';
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    user-select: none;
+    flex-shrink: 0;
+  }
+
+  .icon.filled {
+    font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  }
+
+  /* File type colours (icons only; text never takes a series colour) */
+  .file-image { color: #d93025; }
+  .file-video { color: #d93025; }
+  .file-audio { color: #e37400; }
+  .file-doc { color: #1a73e8; }
+  .file-sheet { color: #188038; }
+  .file-pdf { color: #d93025; }
+  .file-zip { color: #5f6368; }
+  .file-code { color: #1a73e8; }
+  .file-default { color: #5f6368; }
+  .file-folder { color: #5f6368; }
+}
+
+/* Motion */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.96) translateY(4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
 @keyframes shake {
   0%, 100% { transform: translateX(0); }
   25% { transform: translateX(-4px); }
   75% { transform: translateX(4px); }
 }
 
-.animate-shake {
-  animation: shake 0.3s ease-in-out;
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
 }
 
+.anim-fade { animation: fade-in 160ms ease-out both; }
+.anim-pop { animation: pop-in 180ms cubic-bezier(0.2, 0, 0, 1) both; }
+.anim-slide-up { animation: slide-up 220ms cubic-bezier(0.2, 0, 0, 1) both; }
+
+.progress-indeterminate {
+  position: relative;
+  overflow: hidden;
+}
+
+.progress-indeterminate::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: var(--color-primary);
+  border-radius: inherit;
+  animation: indeterminate 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-raised);
+}
+
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.6), transparent);
+  animation: shimmer 1.4s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: #c4c7c5 transparent;
+}

@@ -1,494 +1,414 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
-import { deleteObject, deleteObjects, listDrive, listAll, logout, presignDownload, presignUpload, getDriveStats, objectDownloadUrl } from '../api'
-import { pathSegments } from '../lib'
-import type { FileInfo, DriveListData, User } from '../types'
-
-import Header from '../components/layout/Header'
-import Sidebar from '../components/layout/Sidebar'
-import Toolbar from '../components/drive/Toolbar'
-import NewMenu from '../components/drive/NewMenu'
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { createFolder, deleteObjects, errorMessage, isAbortError, presignDownload, searchDrive } from '../api'
 import FileList from '../components/drive/FileList'
+import FilterBar from '../components/drive/FilterBar'
+import { hasFilters, matchesFilters, noFilters, type DriveFilters } from '../components/drive/filters'
+import NewMenu from '../components/drive/NewMenu'
 import StatusBar from '../components/drive/StatusBar'
-import { filterFolders, filterSortFiles } from '../lib'
-import UploadTray, { type UploadStatus } from '../components/drive/UploadTray'
-import ConfirmModal from '../components/drive/ConfirmModal'
-import axios from 'axios'
+import Toolbar, { type ViewMode } from '../components/drive/Toolbar'
+import UploadTray from '../components/drive/UploadTray'
+import FilePreview, { type PreviewFile } from '../components/preview/FilePreview'
+import AppShell from '../components/layout/AppShell'
+import Button from '../components/ui/Button'
+import ConfirmDialog from '../components/ui/ConfirmDialog'
+import EmptyState from '../components/ui/EmptyState'
+import { permissionsOf, useUser } from '../context/auth'
+import { useToast } from '../context/toast'
+import { useActiveConnection } from '../hooks/useActiveConnection'
+import { useDebouncedValue } from '../hooks/useDebouncedValue'
+import { useDriveListing } from '../hooks/useDriveListing'
+import { useUploads } from '../hooks/useUploads'
+import { baseName, parentOf, pathSegments, sortItems, type SortDir, type SortField } from '../lib'
+import type { DriveItem } from '../types'
 
-type Props = {
-  user: User
-  onLogout: () => void
+type SearchState = { status: 'idle' | 'loading' | 'ready' | 'error'; items: DriveItem[]; truncated: boolean; error?: string }
+
+function readPref<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
+  try {
+    const v = localStorage.getItem(key) as T | null
+    return v && allowed.includes(v) ? v : fallback
+  } catch {
+    return fallback
+  }
 }
 
-export default function DrivePage({ user, onLogout }: Props) {
-  const navigate = useNavigate()
-  const { pathname } = useLocation()
-  const [data, setData] = useState<DriveListData | null>(null)
+function writePref(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    // Storage can be unavailable (private mode); the preference just isn't remembered
+  }
+}
 
-  // Prefix is derived from the URL path: /drive/some/folder -> "some/folder/"
+export default function DrivePage() {
+  const user = useUser()
+  const perms = permissionsOf(user)
+  const navigate = useNavigate()
+  const location = useLocation()
+  const { pathname } = location
+  const toast = useToast()
+
+  // /drive/a/b → "a/b/"
   const prefix = useMemo(() => {
-    const p = pathname.replace(/^\/drive\/?/, '')
-    if (!p) return ''
-    return p.endsWith('/') ? p : p + '/'
+    const p = decodeURIComponent(pathname.replace(/^\/drive\/?/, ''))
+    return p ? (p.endsWith('/') ? p : `${p}/`) : ''
   }, [pathname])
 
-  const [loading, setLoading] = useState(false)
-  const [status, setStatus] = useState('Storage active')
+  const [view, setView] = useState<ViewMode>(() => readPref('ps_view', ['list', 'grid'] as const, 'list'))
+  const [sortField, setSortField] = useState<SortField>(() => readPref('ps_sort', ['name', 'size', 'modified'] as const, 'name'))
+  const [sortDir, setSortDir] = useState<SortDir>(() => readPref('ps_sort_dir', ['asc', 'desc'] as const, 'asc'))
   const [query, setQuery] = useState('')
-  const [sortBy, setSortBy] = useState('name-asc')
-  const [showNewMenu, setShowNewMenu] = useState(false)
-  const [newFolder, setNewFolder] = useState('')
-  const [searchResults, setSearchResults] = useState<any[] | null>(null)
-  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
-  const [activeUploads, setActiveUploads] = useState<UploadStatus[]>([])
-  const [confirmState, setConfirmState] = useState<{
-    isOpen: boolean
-    title: string
-    message: string
-    onConfirm: () => void
-    isDangerous?: boolean
-  }>({ isOpen: false, title: '', message: '', onConfirm: () => { } })
-  const [stats, setStats] = useState({ totalSize: 0, totalFiles: 0, totalFolders: 0, isConfigured: false })
-  const [statsLoaded, setStatsLoaded] = useState(false)
-  const [notFound, setNotFound] = useState(false)
-  const fileRef = useRef<HTMLInputElement>(null)
-  const folderRef = useRef<HTMLInputElement>(null)
-  const folderInputRef = useRef<HTMLInputElement>(null)
+  const debouncedQuery = useDebouncedValue(query.trim(), 350)
+  const [search, setSearch] = useState<SearchState>({ status: 'idle', items: [], truncated: false })
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [filters, setFilters] = useState<DriveFilters>(noFilters)
+  // "New" pressed on another page lands here with the menu open
+  const [newOpen, setNewOpen] = useState(() => !!(location.state as { openNew?: boolean } | null)?.openNew)
+  useEffect(() => {
+    if ((location.state as { openNew?: boolean } | null)?.openNew) navigate(location.pathname, { replace: true, state: null })
+  }, [location.state, location.pathname, navigate])
+  const [pendingDelete, setPendingDelete] = useState<DriveItem[] | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const dragDepth = useRef(0)
 
-  const parentPrefix = data?.parentPrefix || ''
+  const activeConnection = useActiveConnection()
+  const listing = useDriveListing(prefix, perms.canRead)
+  const { reload } = listing
+  const searching = debouncedQuery.length > 0
 
-  const segments = useMemo(() => pathSegments(prefix), [prefix])
-  const isSearching = !!(query.trim() && searchResults)
-  const canReadFiles = !!user.permissions?.canReadFiles
-  const canWriteFiles = !!user.permissions?.canWriteFiles
+  const uploads = useUploads(
+    useCallback(
+      (uploaded: number) => {
+        if (uploaded > 0) {
+          reload()
+          toast.show(`${uploaded} item${uploaded === 1 ? '' : 's'} uploaded`, { tone: 'success' })
+        }
+      },
+      [reload, toast],
+    ),
+  )
 
-  const folders = useMemo(() => {
-    let list: any[] = []
-    if (isSearching && searchResults) {
-      list = searchResults
-        .filter(item => item.key.endsWith('/'))
-        .map(item => ({
-          ...item,
-          prefix: item.key,
-          name: item.key.split('/').filter(Boolean).pop() || item.key
-        }))
-    } else {
-      list = data?.folders || []
-    }
-    return filterFolders(list, query)
-  }, [data, query, searchResults, isSearching])
+  // A new folder or search starts with nothing selected
+  useEffect(() => {
+    setSelected(new Set())
+  }, [prefix, debouncedQuery, filters])
 
-  const files = useMemo(() => {
-    let list: any[] = []
-    if (isSearching && searchResults) {
-      list = searchResults
-        .filter(item => !item.key.endsWith('/'))
-        .map(f => {
-          const parts = f.key.split('/')
-          const name = parts.pop() || f.key
-          const location = parts.join(' / ')
-          return { ...f, name, location }
-        })
-    } else {
-      list = data?.files || []
-    }
-    return filterSortFiles(list, query, sortBy)
-  }, [data, query, sortBy, searchResults, isSearching])
-
-
-  const load = useCallback(async (nextPrefix = prefix) => {
-    setLoading(true)
-    setNotFound(false)
-    try {
-      const [res, driveStats] = await Promise.all([
-        listDrive(nextPrefix),
-        getDriveStats()
-      ])
-      setData(res)
-      setStats(driveStats)
-      setStatus(`${res.folders.length} folders, ${res.files.length} files synchronized`)
-    } catch (err: any) {
-      if (err?.response?.status === 404) {
-        setNotFound(true)
-        setStatus('Folder not found')
-      } else {
-        setStatus(err?.response?.data?.error || err?.message || 'Access failed')
-      }
-    } finally {
-      setLoading(false)
-      setStatsLoaded(true)
-    }
+  // Filters apply to the folder you set them in
+  useEffect(() => {
+    setFilters(noFilters)
   }, [prefix])
 
-  const navigateTo = useCallback((nextPrefix: string) => {
-    setQuery('')
-    setSearchResults(null)
-    setSelectedKeys(new Set())
-    const sanitized = nextPrefix.replace(/^\/+/, '')
-    navigate(`/drive/${sanitized}`)
-  }, [navigate])
-
-  async function handleUpload(files: FileList | null) {
-    if (!canWriteFiles) {
-      setStatus('You do not have permission to upload files')
-      return
-    }
-    if (!files || files.length === 0) return
-
-    setLoading(true)
-    const fileArray = Array.from(files)
-    const total = fileArray.length
-
-    const initialUploads: UploadStatus[] = fileArray.map((f, i) => ({
-      id: `${Date.now()}-${i}`,
-      name: (f as any).webkitRelativePath || f.name,
-      progress: 0,
-      status: 'uploading'
-    }))
-    setActiveUploads(prev => [...prev, ...initialUploads])
-
-    try {
-      const uploadFile = async (file: File, index: number) => {
-        const uploadId = initialUploads[index].id
-        const relativePath = (file as any).webkitRelativePath
-        const name = relativePath || file.name
-        const key = `${prefix}${name}`
-
-        try {
-          const signed = await presignUpload(key, file.type || 'application/octet-stream')
-
-          await axios.put(signed.url, file, {
-            headers: {
-              'Content-Type': file.type || 'application/octet-stream',
-              ...(signed.headers || {})
-            },
-            onUploadProgress: (progressEvent) => {
-              const percentCompleted = Math.round((progressEvent.loaded * 100) / (progressEvent.total || 1))
-              setActiveUploads(prev => prev.map(u =>
-                u.id === uploadId ? { ...u, progress: percentCompleted } : u
-              ))
-            }
-          })
-
-          setActiveUploads(prev => prev.map(u =>
-            u.id === uploadId ? { ...u, progress: 100, status: 'completed' } : u
-          ))
-        } catch (e: any) {
-          setActiveUploads(prev => prev.map(u =>
-            u.id === uploadId ? { ...u, status: 'error', error: e.message } : u
-          ))
-          throw e
-        }
-      }
-
-      // Concurrency limit: 3 files at a time
-      for (let i = 0; i < fileArray.length; i += 3) {
-        const chunk = fileArray.slice(i, i + 3)
-        await Promise.all(chunk.map((f, idx) => uploadFile(f, i + idx)))
-      }
-
-      if (fileRef.current) fileRef.current.value = ''
-      if (folderRef.current) folderRef.current.value = ''
-      setShowNewMenu(false)
-      await load(prefix)
-      const newStats = await getDriveStats()
-      setStats(newStats)
-      setStatus(`Successfully uploaded ${total} items`)
-    } catch (err: any) {
-      setStatus(err?.message || 'Upload failed')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function handleCreateFolder() {
-    if (!canWriteFiles) {
-      setStatus('You do not have permission to create folders')
-      return
-    }
-    const folderName = newFolder.trim().replaceAll('\\', '/').replace(/^\/+|\/+$/g, '')
-    if (!folderName) {
-      setStatus('Folder name is required')
-      return
-    }
-
-    setLoading(true)
-    try {
-      const key = `${prefix}${folderName}/`
-      const signed = await presignUpload(key, 'application/x-directory')
-      const res = await fetch(signed.url, {
-        method: signed.method || 'PUT',
-        headers: signed.headers || {},
-        body: new Blob([]),
-      })
-      if (!res.ok) throw new Error(await res.text())
-      setNewFolder('')
-      setShowNewMenu(false)
-      await load(prefix)
-      setStatus(`Folder "${folderName}" created successfully`)
-    } catch (err: any) {
-      setStatus(err?.message || 'Folder creation failed')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function handleBulkDelete() {
-    if (!canWriteFiles) {
-      setStatus('You do not have permission to delete files')
-      return
-    }
-    if (selectedKeys.size === 0) return
-
-    setConfirmState({
-      isOpen: true,
-      title: 'Delete multiple items',
-      message: `Are you sure you want to permanently delete ${selectedKeys.size} selected items? This action cannot be undone.`,
-      isDangerous: true,
-      onConfirm: async () => {
-        setLoading(true)
-        try {
-          await deleteObjects(Array.from(selectedKeys))
-          setSelectedKeys(new Set())
-          await load(prefix)
-          setStatus(`Successfully deleted items`)
-        } catch (err: any) {
-          setStatus(err?.message || 'Bulk delete operation failed')
-        } finally {
-          setLoading(false)
-        }
-      }
-    })
-  }
-
-  async function handlePreview(file: FileInfo) {
-    try {
-      const signed = await presignDownload(file.key)
-      window.open(signed.url, '_blank', 'noopener')
-      setStatus(`Opening preview for ${file.name}`)
-    } catch (err: any) {
-      setStatus(err?.message || 'Preview initialization failed')
-    }
-  }
-
-  async function handleDownload(file: FileInfo) {
-    try {
-      const link = document.createElement('a')
-      link.href = objectDownloadUrl(file.key)
-      link.download = file.name || file.key.split('/').pop() || 'download'
-      link.rel = 'noopener'
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      setStatus(`Downloading ${file.name}`)
-    } catch (err: any) {
-      setStatus(err?.message || 'Download failed')
-    }
-  }
-
-  async function handleDelete(item: any) {
-    if (!canWriteFiles) {
-      setStatus('You do not have permission to delete files')
-      return
-    }
-    const isFolder = !!item.prefix
-    const name = isFolder ? item.name : (item.name || item.key)
-    const key = isFolder ? item.prefix : item.key
-
-    setConfirmState({
-      isOpen: true,
-      title: 'Delete item',
-      message: `Are you sure you want to permanently delete "${name}"? This action cannot be undone.`,
-      isDangerous: true,
-      onConfirm: async () => {
-        setLoading(true)
-        try {
-          await deleteObject(key)
-          await load(prefix)
-          setStatus(`Deleted ${name}`)
-        } catch (err: any) {
-          setStatus(err?.message || 'Delete operation failed')
-        } finally {
-          setLoading(false)
-        }
-      }
-    })
-  }
-
-  async function doLogout() {
-    try {
-      await logout()
-    } catch (e) {
-    }
-    onLogout()
-    navigate('/login')
-  }
-
   useEffect(() => {
-    if (!canReadFiles) {
-      setData({
-        currentPrefix: '',
-        parentPrefix: '',
-        folders: [],
-        files: [],
-        isTruncated: false,
+    if (!searching || !perms.canRead) {
+      setSearch({ status: 'idle', items: [], truncated: false })
+      return
+    }
+    const controller = new AbortController()
+    setSearch((prev) => ({ ...prev, status: 'loading' }))
+    searchDrive(debouncedQuery, controller.signal)
+      .then((res) => {
+        const items: DriveItem[] = res.items.map((obj) =>
+          obj.key.endsWith('/')
+            ? { kind: 'folder', key: obj.key, name: baseName(obj.key), location: parentOf(obj.key) }
+            : { kind: 'file', key: obj.key, name: baseName(obj.key), size: obj.size, lastModified: obj.lastModified, location: parentOf(obj.key) },
+        )
+        setSearch({ status: 'ready', items, truncated: res.truncated })
       })
-      setStatsLoaded(true)
-      setStatus('Your account does not have read access to files')
-      return
-    }
-    load(prefix)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prefix, canReadFiles])
+      .catch((err) => {
+        if (isAbortError(err)) return
+        setSearch({ status: 'error', items: [], truncated: false, error: errorMessage(err, 'Search failed') })
+      })
+    return () => controller.abort()
+  }, [debouncedQuery, searching, perms.canRead])
 
-  useEffect(() => {
-    if (!canReadFiles) return
-    const q = query.trim()
-    if (!q) {
-      setSearchResults(null)
-      return
-    }
+  const allItems = useMemo(() => {
+    const base: DriveItem[] = searching
+      ? search.items
+      : [
+          ...listing.folders.map((f): DriveItem => ({ kind: 'folder', key: f.prefix, name: f.name })),
+          ...listing.files.map((f): DriveItem => ({ kind: 'file', key: f.key, name: f.name || baseName(f.key), size: f.size, lastModified: f.lastModified })),
+        ]
+    return sortItems(base, sortField, sortDir)
+  }, [searching, search.items, listing.folders, listing.files, sortField, sortDir])
 
-    const timer = setTimeout(async () => {
-      setLoading(true)
+  const items = useMemo(() => allItems.filter((i) => matchesFilters(i, filters)), [allItems, filters])
+
+  const goTo = useCallback(
+    (next: string) => {
+      setQuery('')
+      navigate(`/drive/${next.split('/').map(encodeURIComponent).join('/')}`)
+    },
+    [navigate],
+  )
+
+  const download = useCallback(
+    async (targets: DriveItem[]) => {
+      const files = targets.filter((t) => t.kind === 'file')
+      if (files.length === 0) {
+        toast.show('Folders can’t be downloaded; select files instead')
+        return
+      }
       try {
-        const all = await listAll()
-        setSearchResults(all)
-        setStatus(`Universal search: found ${all.length} matches across drive`)
-      } catch (e) {
-      } finally {
-        setLoading(false)
+        for (const file of files) {
+          const signed = await presignDownload(file.key, true)
+          // The signed URL sets Content-Disposition: attachment, so the page stays put
+          const link = document.createElement('a')
+          link.href = signed.url
+          link.rel = 'noopener'
+          document.body.appendChild(link)
+          link.click()
+          link.remove()
+          if (files.length > 1) await new Promise((r) => setTimeout(r, 400))
+        }
+        if (files.length > 1) toast.show(`Downloading ${files.length} files`)
+      } catch (err) {
+        toast.error(errorMessage(err, 'Download failed'))
       }
-    }, 400)
+    },
+    [toast],
+  )
 
-    return () => clearTimeout(timer)
-  }, [query])
+  const [previewKey, setPreviewKey] = useState<string | null>(null)
+  const previewFiles = useMemo<PreviewFile[]>(
+    () => items.flatMap((i) => (i.kind === 'file' ? [{ key: i.key, name: i.name, size: i.size, lastModified: i.lastModified }] : [])),
+    [items],
+  )
+  const previewIndex = previewKey ? previewFiles.findIndex((f) => f.key === previewKey) : -1
+
+  const open = useCallback(
+    (item: DriveItem) => {
+      if (item.kind === 'folder') goTo(item.key)
+      else setPreviewKey(item.key)
+    },
+    [goTo],
+  )
+
+  async function confirmDelete() {
+    if (!pendingDelete) return
+    try {
+      await deleteObjects(pendingDelete.map((i) => i.key))
+      const n = pendingDelete.length
+      toast.show(n === 1 ? `“${pendingDelete[0].name}” deleted` : `${n} items deleted`)
+      setSelected(new Set())
+      if (searching) setSearch((s) => ({ ...s, items: s.items.filter((i) => !pendingDelete.some((d) => d.key === i.key)) }))
+      reload()
+    } catch (err) {
+      toast.error(errorMessage(err, 'Delete failed'))
+      throw err
+    }
+  }
+
+  async function handleCreateFolder(name: string) {
+    try {
+      await createFolder(prefix, name)
+    } catch (err) {
+      throw new Error(errorMessage(err, 'Could not create the folder'))
+    }
+    reload()
+    toast.show(`Folder “${name}” created`)
+  }
+
+  function addFiles(files: File[]) {
+    if (!perms.canWrite || files.length === 0) return
+    uploads.add(files, prefix)
+  }
+
+  const selectedItems = items.filter((i) => selected.has(i.key))
+
+  // Drag & drop upload (files only: folders dropped from the OS need the folder picker)
+  const dropEnabled = perms.canWrite && !searching
+  const dragHandlers = dropEnabled
+    ? {
+        onDragEnter: (e: DragEvent) => {
+          if (!e.dataTransfer.types.includes('Files')) return
+          dragDepth.current++
+          setDragging(true)
+        },
+        onDragOver: (e: DragEvent) => {
+          if (e.dataTransfer.types.includes('Files')) e.preventDefault()
+        },
+        onDragLeave: () => {
+          dragDepth.current = Math.max(0, dragDepth.current - 1)
+          if (dragDepth.current === 0) setDragging(false)
+        },
+        onDrop: (e: DragEvent) => {
+          e.preventDefault()
+          dragDepth.current = 0
+          setDragging(false)
+          addFiles(Array.from(e.dataTransfer.files).filter((f) => f.size > 0 || f.type !== ''))
+        },
+      }
+    : {}
+
+  const folderName = pathSegments(prefix).at(-1) ?? 'My Drive'
+  const loading = searching ? search.status === 'loading' && search.items.length === 0 : listing.status === 'loading'
+
+  let content
+  if (!perms.canRead) {
+    content = (
+      <EmptyState icon="lock" title="No access to files">
+        Your account can’t view files. Ask the owner for read access.
+      </EmptyState>
+    )
+  } else if (activeConnection === null) {
+    content = (
+      <EmptyState
+        icon="add_link"
+        title="No storage connected"
+        action={perms.canManageConnections ? <Button icon="add" onClick={() => navigate('/connections')}>Connect storage</Button> : undefined}
+      >
+        {perms.canManageConnections ? 'Connect an S3-compatible bucket to start using your drive.' : 'Ask the owner to connect a storage bucket.'}
+      </EmptyState>
+    )
+  } else if (loading) {
+    content = <ListSkeleton />
+  } else if (!searching && listing.status === 'notFound') {
+    content = (
+      <EmptyState icon="folder_off" title="Folder not found" action={<Button onClick={() => goTo('')}>Go to My Drive</Button>}>
+        This folder doesn’t exist or was deleted.
+      </EmptyState>
+    )
+  } else if ((searching && search.status === 'error') || (!searching && listing.status === 'error')) {
+    content = (
+      <EmptyState icon="cloud_off" title="Couldn’t load files" action={<Button icon="refresh" onClick={reload}>Try again</Button>}>
+        {searching ? search.error : listing.error}
+      </EmptyState>
+    )
+  } else if (items.length === 0 && allItems.length > 0) {
+    content = (
+      <EmptyState icon="filter_alt_off" title="Nothing matches these filters" action={<Button variant="tonal" onClick={() => setFilters(noFilters)}>Clear filters</Button>}>
+        {allItems.length} item{allItems.length === 1 ? '' : 's'} here, none of them match.
+      </EmptyState>
+    )
+  } else if (items.length === 0) {
+    content = searching ? (
+      <EmptyState icon="search_off" title="No results">
+        Nothing in this storage matches “{debouncedQuery}”.
+      </EmptyState>
+    ) : (
+      <EmptyState
+        icon={prefix ? 'folder_open' : 'cloud_upload'}
+        title={prefix ? 'This folder is empty' : 'Welcome to your Drive'}
+        action={perms.canWrite ? <Button icon="upload" onClick={() => setNewOpen(true)}>Upload or create</Button> : undefined}
+      >
+        {perms.canWrite ? 'Drop files here, or use the New button.' : 'There’s nothing here yet.'}
+      </EmptyState>
+    )
+  } else {
+    content = (
+      <>
+        <FileList
+          items={items}
+          view={view}
+          sortField={sortField}
+          sortDir={sortDir}
+          onSortChange={(field, dir) => {
+            setSortField(field)
+            setSortDir(dir)
+            writePref('ps_sort', field)
+            writePref('ps_sort_dir', dir)
+          }}
+          selected={selected}
+          onSelectionChange={setSelected}
+          onDeleteSelected={perms.canWrite ? () => setPendingDelete(selectedItems) : undefined}
+          canSelect
+          showLocation={searching}
+          onOpen={open}
+          onDownload={(item) => void download([item])}
+          onDelete={perms.canWrite ? (item) => setPendingDelete([item]) : undefined}
+          onOpenLocation={(item) => goTo(item.location ?? '')}
+        />
+        <StatusBar
+          items={items}
+          hasMore={!searching && !!listing.nextToken}
+          loadingMore={listing.loadingMore}
+          onLoadMore={listing.loadMore}
+          note={searching && search.truncated ? 'Showing the first 300 matches. Refine your search to narrow it down.' : undefined}
+        />
+      </>
+    )
+  }
 
   return (
-    <div className="h-screen flex flex-col bg-white overflow-hidden selection:bg-black selection:text-white">
-      <Header
-        user={user}
-        loading={loading}
-        query={query}
-        onQueryChange={setQuery}
-        onRefresh={() => load(prefix)}
-        onLogout={doLogout}
-      />
-
-      <div className="flex-1 flex overflow-hidden min-h-0">
-        <Sidebar
-          onNewClick={() => {
-            if (canWriteFiles) setShowNewMenu(!showNewMenu)
+    <AppShell
+      search={perms.canRead ? { value: query, onChange: setQuery, busy: search.status === 'loading' } : undefined}
+      onNew={perms.canWrite ? () => setNewOpen(true) : undefined}
+    >
+      <div className="flex-1 min-h-0 flex flex-col relative" {...dragHandlers}>
+        <Toolbar
+          segments={pathSegments(prefix)}
+          onNavigate={goTo}
+          searchQuery={searching ? debouncedQuery : undefined}
+          view={view}
+          onViewChange={(v) => {
+            setView(v)
+            writePref('ps_view', v)
           }}
-          filesCount={stats.totalFiles}
-          foldersCount={stats.totalFolders}
-          totalSize={stats.totalSize}
-          isConfigured={stats.isConfigured}
-          connectionsLoading={!statsLoaded}
-          disableNew={!canWriteFiles}
-          canSeeConnections={!!user.permissions?.canManageConnections}
-          canSeeSettings={!!user.permissions?.canManageSettings || user.role === 'owner'}
+          selectedCount={selected.size}
+          totalCount={items.length}
+          onSelectAll={() => setSelected(new Set(items.map((i) => i.key)))}
+          onClearSelection={() => setSelected(new Set())}
+          filters={
+            perms.canRead && activeConnection !== null && (allItems.length > 0 || hasFilters(filters)) ? (
+              <FilterBar filters={filters} onChange={setFilters} shown={items.length} total={allItems.length} />
+            ) : undefined
+          }
+          onDownloadSelected={selectedItems.some((i) => i.kind === 'file') ? () => void download(selectedItems) : undefined}
+          onDeleteSelected={perms.canWrite ? () => setPendingDelete(selectedItems) : undefined}
         />
+        {!searching && listing.status === 'ready' && listing.error && (
+          <div className="mx-6 mb-2 text-sm text-danger">{listing.error}</div>
+        )}
+        <div className="flex-1 min-h-0 overflow-y-auto scroll-thin">{content}</div>
 
-        <NewMenu
-          isOpen={showNewMenu && canWriteFiles}
-          onClose={() => setShowNewMenu(false)}
-          newFolder={newFolder}
-          onNewFolderChange={setNewFolder}
-          onCreateFolder={handleCreateFolder}
-          onUpload={handleUpload}
-          loading={loading}
-          fileRef={fileRef}
-          folderRef={folderRef}
-          folderInputRef={folderInputRef}
-        />
-
-        <main className="flex-1 flex flex-col overflow-hidden bg-white border-l border-gray-200 min-h-0 relative">
-          {loading && (
-            <div className="absolute top-0 left-0 right-0 h-0.5 bg-gray-500 animate-pulse z-20" />
-          )}
-          <Toolbar
-            segments={segments}
-            sortBy={sortBy}
-            onSortByChange={setSortBy}
-            onUpClick={() => navigateTo(parentPrefix)}
-            onLoad={navigateTo}
-            parentPrefix={parentPrefix}
-            loading={loading}
-            selectedCount={canWriteFiles ? selectedKeys.size : 0}
-            onBulkDelete={canWriteFiles ? handleBulkDelete : undefined}
-          />
-
-          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto">
-            {loading && !data ? (
-              <div className="p-4 md:p-6 space-y-3">
-                <div className="h-10 border border-gray-200 bg-gray-50 animate-pulse" />
-                <div className="h-10 border border-gray-200 bg-gray-50 animate-pulse" />
-                <div className="h-10 border border-gray-200 bg-gray-50 animate-pulse" />
-                <div className="h-10 border border-gray-200 bg-gray-50 animate-pulse" />
-                <div className="h-10 border border-gray-200 bg-gray-50 animate-pulse" />
-              </div>
-            ) : notFound ? (
-              <div className="flex flex-col items-center justify-center h-full text-center p-8">
-                <div className="w-24 h-24 border border-black flex items-center justify-center mb-6">
-                  <span className="material-symbols-outlined text-5xl text-black">folder_off</span>
-                </div>
-                <h2 className="text-xl font-bold text-black mb-2 uppercase tracking-wide">Folder Not Found</h2>
-                <p className="text-gray-700 mb-8 max-w-xs">
-                  This folder doesn't exist or has been moved.
-                </p>
-                <button
-                  onClick={() => navigateTo('')}
-                  className="px-6 py-2.5 bg-black text-white font-bold border border-black hover:bg-neutral-900"
-                >
-                  Back to My Drive
-                </button>
-              </div>
-            ) : (
-              <FileList
-                folders={folders}
-                files={files}
-                onFolderClick={navigateTo}
-                onPreview={handlePreview}
-                onDownload={handleDownload}
-                onDelete={handleDelete}
-                isSearching={isSearching}
-                selectedKeys={selectedKeys}
-                onSelectionChange={setSelectedKeys}
-                canWrite={canWriteFiles}
-              />
-            )}
-          </div>
-
-          {loading && data && (
-            <div className="absolute inset-0 bg-white/55 backdrop-blur-[1px] pointer-events-none flex items-start justify-center pt-14 z-10">
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-300 shadow-sm text-xs font-semibold uppercase tracking-wider text-black">
-                <span className="w-3.5 h-3.5 border-2 border-black border-t-transparent rounded-full animate-spin" />
-                Loading
-              </div>
+        {dragging && (
+          <div className="absolute inset-2 rounded-2xl border-2 border-primary bg-primary/5 flex items-end justify-center pb-10 pointer-events-none anim-fade z-20">
+            <div className="flex items-center gap-3 px-6 py-3 rounded-full bg-primary text-white shadow-raised">
+              <span className="icon">upload</span>
+              Drop files to upload them to <strong className="font-medium">{folderName}</strong>
             </div>
-          )}
-        </main>
+          </div>
+        )}
       </div>
 
-      <StatusBar
-        loading={loading}
-        status={status}
+      {previewIndex >= 0 && (
+        <FilePreview
+          files={previewFiles}
+          index={previewIndex}
+          onIndexChange={(i) => setPreviewKey(previewFiles[i]?.key ?? null)}
+          onClose={() => setPreviewKey(null)}
+          onDownload={(f) => void download([{ kind: 'file', key: f.key, name: f.name, size: f.size, lastModified: f.lastModified }])}
+        />
+      )}
+      <NewMenu open={newOpen} onClose={() => setNewOpen(false)} onCreateFolder={handleCreateFolder} onFiles={addFiles} />
+      <UploadTray items={uploads.items} onCancel={uploads.cancel} onCancelAll={uploads.cancelAll} onClose={uploads.clear} />
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title={pendingDelete?.length === 1 ? `Delete “${pendingDelete[0].name}”?` : `Delete ${pendingDelete?.length ?? 0} items?`}
+        message={
+          pendingDelete?.some((i) => i.kind === 'folder')
+            ? 'Folders are deleted with everything inside them. This can’t be undone.'
+            : 'This permanently deletes the selected items. This can’t be undone.'
+        }
+        confirmLabel="Delete"
+        danger
+        onConfirm={confirmDelete}
+        onClose={() => setPendingDelete(null)}
       />
+    </AppShell>
+  )
+}
 
-      <UploadTray
-        uploads={activeUploads}
-        onClose={() => setActiveUploads([])}
-      />
-
-      <ConfirmModal
-        isOpen={confirmState.isOpen}
-        onClose={() => setConfirmState(prev => ({ ...prev, isOpen: false }))}
-        onConfirm={confirmState.onConfirm}
-        title={confirmState.title}
-        message={confirmState.message}
-        isDangerous={confirmState.isDangerous}
-      />
+function ListSkeleton() {
+  return (
+    <div className="px-6 pt-2 space-y-3" aria-busy="true" aria-label="Loading files">
+      {Array.from({ length: 8 }, (_, i) => (
+        <div key={i} className="flex items-center gap-4 h-9">
+          <div className="skeleton w-6 h-6 rounded" />
+          <div className="skeleton h-4 rounded-full" style={{ width: `${30 + ((i * 37) % 40)}%` }} />
+        </div>
+      ))}
     </div>
   )
 }

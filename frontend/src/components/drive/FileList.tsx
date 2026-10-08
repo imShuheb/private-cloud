@@ -1,146 +1,186 @@
-import React from 'react'
-import type { FileInfo, FolderInfo } from '../../types'
-import FileRow from './FileRow'
+import { useRef, type KeyboardEvent, type MouseEvent } from 'react'
+import { cx, type SortDir, type SortField } from '../../lib'
+import type { DriveItem } from '../../types'
+import FileRow, { FileCard } from './FileRow'
+import { listColumns, type ItemActions } from './itemActions'
+import type { ViewMode } from './Toolbar'
 
-type FileListProps = {
-  folders: FolderInfo[]
-  files: (FileInfo & { location?: string })[]
-  onFolderClick: (prefix: string) => void
-  onPreview: (f: FileInfo) => void
-  onDownload: (f: FileInfo) => void
-  onDelete: (item: any) => void
-  isSearching: boolean
-  selectedKeys: Set<string>
-  onSelectionChange: (keys: Set<string>) => void
-  canWrite: boolean
+type Props = ItemActions & {
+  items: DriveItem[]
+  view: ViewMode
+  sortField: SortField
+  sortDir: SortDir
+  onSortChange: (field: SortField, dir: SortDir) => void
+  selected: Set<string>
+  onSelectionChange: (next: Set<string>) => void
+  onDeleteSelected?: () => void
+  canSelect: boolean
+  showLocation: boolean
 }
 
-const FileList: React.FC<FileListProps> = ({
-  folders,
-  files,
-  onFolderClick,
-  onPreview,
-  onDownload,
-  onDelete,
-  isSearching,
-  selectedKeys,
+/**
+ * List or grid. Clicking an item opens it; the checkbox, Ctrl/Cmd-click, Shift-click and
+ * Ctrl/Cmd+A select. Escape clears the selection and Delete/Backspace deletes it.
+ */
+export default function FileList({
+  items,
+  view,
+  sortField,
+  sortDir,
+  onSortChange,
+  selected,
   onSelectionChange,
-  canWrite
-}) => {
-  const isEmpty = folders.length === 0 && files.length === 0
+  onDeleteSelected,
+  canSelect,
+  showLocation,
+  ...actions
+}: Props) {
+  const anchor = useRef<string | null>(null)
+  const selectionMode = selected.size > 0
+  const allSelected = items.length > 0 && items.every((i) => selected.has(i.key))
 
-  const allVisibleKeys = [...folders.map(f => f.prefix), ...files.map(f => f.key)]
-  const isAllSelected = allVisibleKeys.length > 0 && allVisibleKeys.every(k => selectedKeys.has(k))
-
-  const toggleAll = () => {
-    if (isAllSelected) {
-      const next = new Set(selectedKeys)
-      allVisibleKeys.forEach(k => next.delete(k))
-      onSelectionChange(next)
-    } else {
-      const next = new Set(selectedKeys)
-      allVisibleKeys.forEach(k => next.add(k))
-      onSelectionChange(next)
+  /** A plain click opens the item; Shift and Ctrl/Cmd clicks select instead. */
+  function select(item: DriveItem, e: MouseEvent) {
+    const keys = items.map((i) => i.key)
+    if (canSelect && e.shiftKey && anchor.current && keys.includes(anchor.current)) {
+      const [a, b] = [keys.indexOf(anchor.current), keys.indexOf(item.key)].sort((x, y) => x - y)
+      onSelectionChange(new Set(keys.slice(a, b + 1)))
+      return
     }
+    if (canSelect && (e.metaKey || e.ctrlKey || e.shiftKey)) {
+      toggle(item)
+      return
+    }
+    actions.onOpen(item)
   }
 
-  const toggleOne = (key: string) => {
-    const next = new Set(selectedKeys)
-    if (next.has(key)) next.delete(key)
-    else next.add(key)
+  function toggle(item: DriveItem) {
+    if (!canSelect) return
+    anchor.current = item.key
+    const next = new Set(selected)
+    if (next.has(item.key)) next.delete(item.key)
+    else next.add(item.key)
     onSelectionChange(next)
   }
 
-  if (isEmpty) {
+  function toggleAll() {
+    onSelectionChange(allSelected ? new Set() : new Set(items.map((i) => i.key)))
+  }
+
+  function onKeyDown(e: KeyboardEvent) {
+    if (!canSelect) return
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
+      e.preventDefault()
+      onSelectionChange(new Set(items.map((i) => i.key)))
+    } else if (e.key === 'Escape' && selectionMode) {
+      onSelectionChange(new Set())
+    } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectionMode && onDeleteSelected) {
+      e.preventDefault()
+      onDeleteSelected()
+    }
+  }
+
+  const rowProps = { canSelect, selectionMode, onSelect: select, onToggle: toggle, showLocation, ...actions }
+
+  if (view === 'grid') {
+    const folders = items.filter((i) => i.kind === 'folder')
+    const files = items.filter((i) => i.kind === 'file')
     return (
-      <div className="flex flex-col items-center justify-center py-32 text-center animate-in fade-in slide-in-from-bottom-4 duration-500">
-        <div className="w-40 h-40 border border-black flex items-center justify-center mb-6">
-          <span className="material-symbols-outlined text-7xl text-black">
-            {isSearching ? 'search_off' : 'cloud_upload'}
-          </span>
-        </div>
-        <h3 className="text-xl text-black font-semibold mb-2 uppercase tracking-wide">
-          {isSearching ? 'No results found' : 'My Drive is empty'}
-        </h3>
-        <p className="text-gray-700 max-w-xs mx-auto leading-relaxed">
-          {isSearching
-            ? "We couldn't find anything matching your search. Try a different term."
-            : 'Click the "New" button to upload your first file or create a folder to get started.'}
-        </p>
+      <div role="grid" aria-multiselectable={canSelect} onKeyDown={onKeyDown} className="px-4 sm:px-6 pt-2 pb-6 space-y-6">
+        {folders.length > 0 && (
+          <section>
+            <h2 className="text-sm font-medium text-ink mb-3">Folders</h2>
+            <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
+              {folders.map((item) => (
+                <FileCard key={item.key} item={item} selected={selected.has(item.key)} {...rowProps} />
+              ))}
+            </div>
+          </section>
+        )}
+        {files.length > 0 && (
+          <section>
+            <h2 className="text-sm font-medium text-ink mb-3">Files</h2>
+            <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
+              {files.map((item) => (
+                <FileCard key={item.key} item={item} selected={selected.has(item.key)} {...rowProps} />
+              ))}
+            </div>
+          </section>
+        )}
       </div>
     )
   }
 
   return (
-    <div className="pb-6 animate-in fade-in duration-300">
-      <div className="min-w-[760px] md:min-w-full">
-        {/* Column headers */}
-        <div className="flex items-center gap-4 px-4 py-3 text-[11px] font-bold text-black uppercase tracking-widest border-b border-gray-200 bg-white sticky top-0 ">
-          <div className="w-8 shrink-0 flex items-center justify-center">
-            {canWrite ? (
-              <input
-                type="checkbox"
-                className="w-4 h-4 border-gray-400 text-black cursor-pointer"
-                checked={isAllSelected}
-                onChange={toggleAll}
-              />
-            ) : null}
-          </div>
-          <span className="flex-1">Name</span>
-          {isSearching && <span className="w-48 shrink-0 text-left px-2">Location</span>}
-          <span className="w-24 shrink-0 text-right">Size</span>
-          <span className="w-40 shrink-0 text-right">Modified</span>
-          <span className="w-32 shrink-0 text-right pr-2">Actions</span>
+    <div role="grid" aria-multiselectable={canSelect} onKeyDown={onKeyDown} className="pb-6">
+      <div
+        role="row"
+        className={cx(
+          'sticky top-0 z-10 bg-surface grid items-center gap-4 h-12 px-4 sm:px-6 border-b border-line-soft text-sm font-medium text-ink',
+          listColumns(showLocation),
+        )}
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          {canSelect && (
+            <button
+              role="checkbox"
+              aria-checked={allSelected ? 'true' : selectionMode ? 'mixed' : 'false'}
+              aria-label={allSelected ? 'Deselect all' : 'Select all'}
+              title={allSelected ? 'Deselect all' : 'Select all'}
+              onClick={toggleAll}
+              className="w-8 h-8 -ml-1.5 rounded-full flex items-center justify-center shrink-0 hover:bg-hover"
+            >
+              <span className={cx('icon text-[22px]', selectionMode ? 'filled text-primary' : 'text-ink-2')}>
+                {allSelected ? 'check_box' : selectionMode ? 'indeterminate_check_box' : 'check_box_outline_blank'}
+              </span>
+            </button>
+          )}
+          <SortHeader label="Name" field="name" sortField={sortField} sortDir={sortDir} onSortChange={onSortChange} />
         </div>
-
-        {/* Folders List */}
-        {folders.length > 0 && (
-          <div className="mb-2">
-            <div className="text-xs font-bold text-gray-400 px-4 py-3 uppercase tracking-wider">Folders</div>
-            <div className="divide-y divide-gray-200">
-              {folders.map((f) => (
-                <FileRow
-                  key={f.prefix}
-                  item={f}
-                  isFolder={true}
-                  onClick={() => onFolderClick(f.prefix)}
-                  onDelete={onDelete}
-                  location={isSearching ? (f as any).location : undefined}
-                  selected={selectedKeys.has(f.prefix)}
-                  onToggleSelect={() => toggleOne(f.prefix)}
-                  canWrite={canWrite}
-                />
-              ))}
-            </div>
-          </div>
+        {showLocation && (
+          <span role="columnheader" className="hidden md:block">
+            Location
+          </span>
         )}
-
-        {/* Files List */}
-        {files.length > 0 && (
-          <div>
-            <div className="text-xs font-bold text-gray-400 px-4 py-3 uppercase tracking-wider">Files</div>
-            <div className="divide-y divide-gray-200">
-              {files.map((f) => (
-                <FileRow
-                  key={f.key}
-                  item={f}
-                  isFolder={false}
-                  onClick={() => { }}
-                  onPreview={onPreview}
-                  onDownload={onDownload}
-                  onDelete={onDelete}
-                  location={f.location}
-                  selected={selectedKeys.has(f.key)}
-                  onToggleSelect={() => toggleOne(f.key)}
-                  canWrite={canWrite}
-                />
-              ))}
-            </div>
-          </div>
-        )}
+        <SortHeader label="Modified" field="modified" sortField={sortField} sortDir={sortDir} onSortChange={onSortChange} className="hidden md:flex" />
+        <SortHeader label="Size" field="size" sortField={sortField} sortDir={sortDir} onSortChange={onSortChange} className="hidden md:flex" />
+        <span />
       </div>
+      {items.map((item) => (
+        <FileRow key={item.key} item={item} selected={selected.has(item.key)} {...rowProps} />
+      ))}
     </div>
   )
 }
 
-export default FileList
+function SortHeader({
+  label,
+  field,
+  sortField,
+  sortDir,
+  onSortChange,
+  className,
+}: {
+  label: string
+  field: SortField
+  sortField: SortField
+  sortDir: SortDir
+  onSortChange: (field: SortField, dir: SortDir) => void
+  className?: string
+}) {
+  const active = sortField === field
+  const nextDir: SortDir = active ? (sortDir === 'asc' ? 'desc' : 'asc') : field === 'name' ? 'asc' : 'desc'
+  return (
+    <button
+      role="columnheader"
+      aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      onClick={() => onSortChange(field, nextDir)}
+      className={cx('flex items-center gap-1 h-8 -ml-2 px-2 rounded-full hover:bg-hover w-fit whitespace-nowrap', className)}
+    >
+      {label}
+      <span className={cx('icon text-[18px] transition-transform', active ? 'text-ink' : 'invisible', active && sortDir === 'desc' && 'rotate-180')}>
+        arrow_upward
+      </span>
+    </button>
+  )
+}

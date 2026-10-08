@@ -3,17 +3,20 @@
 A secure, modern S3-compatible cloud storage explorer. Manage multiple cloud storage accounts with ease using a high-performance Go backend and a responsive React interface.
 
 ## ✨ Highlights
+- **Drive-style Web App**: List and grid views, breadcrumbs, multi-select (click, Ctrl/Cmd, Shift, Ctrl/Cmd+A), drag & drop uploads, folder uploads and an upload panel with per-file cancel.
+- **Storage Insights**: Scan a bucket in the background to see storage by file type, the largest folders (at any depth), size and age breakdowns, possible duplicates, and a sortable, filterable list of the 5,000 largest files.
+- **Bucket-wide Search**: Finds files by name anywhere in the bucket, not just the current folder.
 - **Multi-Connection Ready**: Add and manage multiple S3 storage profiles (AWS, MinIO, R2, Wasabi).
 - **SQLite Persistence**: Admin identity + connections are persisted in SQLite (`config/private-storage.db`).
 - **Encryption at Rest**: S3 Access/Secret keys are AES-GCM encrypted before being written to SQLite.
 - **Hardened Auth**: Admin password is stored as a bcrypt hash (not plaintext).
 - **Owner + User Access Model**: Owner can create users and manage per-user permissions.
 - **Dynamic Switching**: Swap between active buckets instantly via the dashboard.
-- **Preview + Direct Download**: Preview opens in a new tab, while Download triggers a real file download.
+- **In-app Preview**: Images, SVG, video, audio, PDF and text/code files open in a full-screen viewer; Download saves the file.
 - **Built-in SFTP Bridge**: SFTP uses the same active web connection for consistent file access.
 - **Settings Page**: Manage server settings and users access from a dedicated settings area.
 - **Optional HTTPS**: Native TLS support via cert/key environment variables.
-- **Modern Stack**: Built with Go 1.22+, React 18+, and Tailwind CSS.
+- **Modern Stack**: Built with Go 1.25+, React 18+, and Tailwind CSS.
 - **Security First**: Presigned URL support for secure uploads/downloads.
 
 ---
@@ -132,7 +135,7 @@ While storage is managed via the UI, you can set these environment variables in 
 | `SFTP_ADDR` | SFTP bind address | `0.0.0.0:2022` |
 | `TLS_CERT_FILE` | Path to TLS cert PEM (enables HTTPS when set with key) | empty |
 | `TLS_KEY_FILE` | Path to TLS private key PEM | empty |
-| `APP_SECRET` | Secret used for credential encryption | (Auto-generated) |
+| `APP_SECRET` | Secret used for credential encryption (any length; e.g. `openssl rand -hex 32`) | Random key generated in `config/app.key` |
 
 Notes:
 - If `TLS_CERT_FILE` + `TLS_KEY_FILE` are set, server starts with HTTPS.
@@ -159,7 +162,7 @@ npm run dev
 ## 🔐 Security Note
 All storage credentials added through the dashboard are stored in SQLite (`config/private-storage.db`). To protect these keys, the application encrypts access/secret keys at rest using AES-GCM. For production deployments:
 
-- set a custom `APP_SECRET`
+- set a custom `APP_SECRET` (without it, a random key is generated in `config/app.key`; back it up together with the database, since credentials can't be decrypted without it)
 - run behind HTTPS (or set `TLS_CERT_FILE` + `TLS_KEY_FILE`)
 - set `ADMIN_API_KEY` only if you need token-based API access
 
@@ -176,8 +179,34 @@ Quick setup:
 4. Start app and connect phone file manager to `<host>:2022` over SFTP
 
 ### File Access Behavior (Web)
-- **Preview**: opens the file in a new browser tab.
+- **Preview**: opens supported files (images, SVG, video, audio, PDF, text up to 1 MB) in the in-app viewer. PDFs, SVGs and text are fetched by the browser, which also needs the bucket's CORS rule.
 - **Download**: triggers an actual attachment download.
+- Uploads and downloads go **directly between the browser and the bucket** with presigned URLs, so the bucket needs a CORS rule allowing `GET`/`PUT` from the app's origin and exposing `ETag`.
+
+### Storage Insights
+**Storage insights** (left menu) scans the active bucket's object listing, never the file contents. The first scan starts automatically; **Rescan** refreshes it, and a scan can be stopped at any time (the previous results are kept). Results stay in memory per connection and are lost on restart. On very large buckets a scan takes a while: it pages through the listing 1,000 objects at a time.
+
+### Security behaviour
+- Changing a user's permissions, disabling them or deleting them applies **immediately**, including to sessions that are already signed in.
+- After 10 failed sign-ins for one username from one address within 15 minutes, further attempts are refused for the rest of that window.
+- The API never returns stored S3 keys; editing a connection with blank keys keeps the saved ones.
+- New and edited connections are tested against the bucket before they are saved.
+
+### API (main endpoints)
+All endpoints except `/api/auth/*` and `/api/health` need a session cookie or `ADMIN_API_KEY`. Errors are JSON: `{"error": "..."}`.
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/drive/list?prefix=&continuationToken=` | One folder, paginated |
+| `GET /api/drive/search?q=&limit=` | Name search across the bucket |
+| `GET /api/drive/stats` | Totals from the latest scan (starts one if needed) |
+| `POST /api/drive/presign/upload` | Presigned PUT for a key |
+| `GET /api/drive/presign/download?key=&download=1` | Presigned GET; `download=1` forces a file save |
+| `POST /api/bulk-objects-delete` | Delete files and folders (`{"keys": [...]}`) |
+| `GET /api/analytics` | Scan status and report summary |
+| `POST /api/analytics/scan`, `POST /api/analytics/scan/cancel` | Start or stop a scan |
+| `GET /api/analytics/files?sort=size\|name\|modified\|type&order=&category=&q=&minSize=&folder=&offset=&limit=` | Largest files, filtered and paged |
+| `GET /api/connections/active` | Active storage name and bucket |
 
 ---
 ## 📄 License

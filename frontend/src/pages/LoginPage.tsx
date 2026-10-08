@@ -1,45 +1,49 @@
-import { useState } from 'react'
-import type { FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { login } from '../api'
-import type { User } from '../types'
+import { useState, type FormEvent } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { errorMessage, login } from '../api'
 import LoginCard from '../components/auth/LoginCard'
 import LoginForm from '../components/auth/LoginForm'
+import { homePath, useAuth } from '../context/auth'
 
-type Props = {
-  onLogin: (u: User) => void
+function rememberedUsername(): string {
+  try {
+    return localStorage.getItem('ps_username') ?? ''
+  } catch {
+    return ''
+  }
 }
 
-export default function LoginPage({ onLogin }: Props) {
+export default function LoginPage() {
+  const { signIn } = useAuth()
   const navigate = useNavigate()
-  const [username, setUsername] = useState(localStorage.getItem('ps_username') || '')
+  const location = useLocation()
+  const [username, setUsername] = useState(rememberedUsername)
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   async function submit(e: FormEvent) {
     e.preventDefault()
-    setError('')
-
-    if (!username.trim() || !password.trim()) {
-      setError('Username and password are required')
+    if (!username.trim() || !password) {
+      setError('Enter your username and password')
       return
     }
 
+    setError('')
     setLoading(true)
     try {
-      localStorage.setItem('ps_username', username.trim())
       const user = await login(username.trim(), password)
-      onLogin(user)
-      if (user.permissions?.canManageConnections) {
-        navigate('/connections')
-      } else if (user.permissions?.canManageSettings || user.role === 'owner') {
-        navigate('/settings')
-      } else {
-        navigate('/drive')
+      try {
+        localStorage.setItem('ps_username', username.trim())
+      } catch {
+        // Not remembering the username is fine
       }
-    } catch (err: any) {
-      setError(err?.response?.data?.error || err?.message || 'Login failed')
+      signIn(user)
+      const from = (location.state as { from?: string } | null)?.from
+      navigate(from && from !== '/login' ? from : homePath(user), { replace: true })
+    } catch (err) {
+      setError(errorMessage(err, 'Sign-in failed'))
+      setPassword('')
     } finally {
       setLoading(false)
     }

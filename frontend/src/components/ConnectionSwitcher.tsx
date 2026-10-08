@@ -1,107 +1,111 @@
-import { useState, useEffect } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getConnections, switchConnection } from '../api'
+import { errorMessage, getConnections, switchConnection } from '../api'
+import { permissionsOf, useUser } from '../context/auth'
+import { useToast } from '../context/toast'
+import { useActiveConnection } from '../hooks/useActiveConnection'
+import { useDismiss } from '../hooks/useDismiss'
+import { cx } from '../lib'
 import type { ConnectionsList } from '../types'
+import { Spinner } from './ui/Button'
 
+/** Shows the active storage; users who manage connections can switch from here. */
 export default function ConnectionSwitcher() {
+  const user = useUser()
+  const canManage = permissionsOf(user).canManageConnections
+  const active = useActiveConnection()
   const navigate = useNavigate()
-  const [data, setData] = useState<ConnectionsList | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [isOpen, setIsOpen] = useState(false)
-  const [error, setError] = useState('')
+  const toast = useToast()
 
-  useEffect(() => {
-    load()
-  }, [])
+  const [open, setOpen] = useState(false)
+  const [list, setList] = useState<ConnectionsList | null>(null)
+  const [switching, setSwitching] = useState<string | null>(null)
+  const ref = useRef<HTMLDivElement>(null)
+  const close = useCallback(() => setOpen(false), [])
+  useDismiss(ref, open, close)
 
-  async function load() {
-    try {
-      const list = await getConnections()
-      setData(list)
-    } catch (err) {
-      console.error('Failed to load connections', err)
+  if (active === undefined || active === null) return null
+
+  async function toggle() {
+    if (!canManage) return
+    const next = !open
+    setOpen(next)
+    if (next) {
+      try {
+        setList(await getConnections())
+      } catch (err) {
+        toast.error(errorMessage(err, 'Could not load connections'))
+      }
     }
   }
 
-  async function handleSwitch(id: string) {
-    if (id === data?.activeId) return
-    setLoading(true)
-    setError('')
+  async function select(id: string) {
+    if (id === active?.id) return close()
+    setSwitching(id)
     try {
       await switchConnection(id)
-      window.location.reload() // Fastest way to refresh all data for new store
+      // Every page caches data for the old bucket; a reload is the simplest way to start clean
+      window.location.assign('/drive')
     } catch (err) {
-      setError('Failed to switch storage')
-    } finally {
-      setLoading(false)
+      toast.error(errorMessage(err, 'Could not switch storage'))
+      setSwitching(null)
     }
   }
 
-  const activeConn = data?.connections?.find(c => c.id === data.activeId)
-
   return (
-    <div className="relative">
+    <div ref={ref} className="relative hidden md:block">
       <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 transition-all border border-gray-300 hover:border-black max-w-[220px]"
+        onClick={toggle}
+        className={cx(
+          'h-10 pl-3 pr-2 rounded-full flex items-center gap-2 text-sm text-ink-2 max-w-[240px]',
+          canManage ? 'hover:bg-hover' : 'cursor-default',
+        )}
+        title={`${active.name} · ${active.bucket}`}
       >
-        <div className="w-2 h-2 rounded-full bg-black animate-pulse" />
-        <span className="text-sm font-medium text-gray-800 truncate">
-          {activeConn?.name || 'Loading storage...'}
-        </span>
-        <svg className={`w-4 h-4 text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="19 9l-7 7-7-7" />
-        </svg>
+        <span className="icon text-[20px] text-success">database</span>
+        <span className="truncate">{active.name}</span>
+        {canManage && <span className={cx('icon text-[20px] transition-transform', open && 'rotate-180')}>arrow_drop_down</span>}
       </button>
 
-      {isOpen && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setIsOpen(false)} />
-          <div className="absolute right-0 mt-2 w-64 bg-white shadow-xl border border-gray-300 z-50 py-2 animate-in fade-in zoom-in-95 duration-100">
-            <div className="px-4 py-2 text-[10px] font-bold text-gray-500 uppercase tracking-widest">
-              Switch Connection
+      {open && (
+        <div className="absolute right-0 top-full mt-1 w-72 bg-surface rounded-lg shadow-menu py-2 z-[120] anim-pop origin-top-right">
+          <div className="px-4 py-2 text-xs font-medium text-ink-3">Storage connections</div>
+          {!list ? (
+            <div className="px-4 py-3 flex items-center gap-2 text-sm text-ink-2">
+              <Spinner small /> Loading…
             </div>
-            {error && (
-              <div className="mx-2 mb-2 px-2 py-1 text-[11px] font-semibold text-black bg-gray-100 border border-gray-300">
-                {error}
-              </div>
-            )}
-            {data?.connections?.map((conn) => (
+          ) : (
+            list.connections.map((c) => (
               <button
-                key={conn.id}
-                onClick={() => handleSwitch(conn.id)}
-                disabled={loading}
-                className={`w-full px-4 py-2.5 text-left flex items-center justify-between hover:bg-gray-50 transition-colors group ${conn.id === data.activeId ? 'bg-black text-white' : ''}`}
+                key={c.id}
+                onClick={() => select(c.id)}
+                disabled={!!switching}
+                className="w-full flex items-center gap-3 px-4 py-2 text-left hover:bg-hover disabled:opacity-60"
               >
-                <div>
-                  <div className={`text-sm font-semibold ${conn.id === data.activeId ? 'text-white' : 'text-gray-800'}`}>
-                    {conn.name}
-                  </div>
-                  <div className={`text-[10px] ${conn.id === data.activeId ? 'text-gray-200' : 'text-gray-500'}`}>{conn.bucket}</div>
-                </div>
-                {conn.id === data.activeId && (
-                  <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                  </svg>
-                )}
+                <span className={cx('icon text-[20px]', c.id === list.activeId ? 'text-primary filled' : 'text-ink-3')}>
+                  {c.id === list.activeId ? 'radio_button_checked' : 'radio_button_unchecked'}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm text-ink truncate">{c.name}</span>
+                  <span className="block text-xs text-ink-3 truncate">{c.bucket}</span>
+                </span>
+                {switching === c.id && <Spinner small className="text-primary" />}
               </button>
-            ))}
-            <div className="mt-2 border-t border-gray-200 pt-2 px-2">
-              <button
-                className="w-full px-3 py-2 text-xs font-medium text-gray-700 hover:text-black hover:bg-gray-50 border border-transparent hover:border-gray-300 transition-all flex items-center gap-2"
-                onClick={() => {
-                  setIsOpen(false)
-                  navigate('/connections')
-                }}
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                Manage Connections
-              </button>
-            </div>
+            ))
+          )}
+          <div className="border-t border-line-soft mt-2 pt-2">
+            <button
+              className="w-full flex items-center gap-3 px-4 h-10 text-sm text-ink hover:bg-hover"
+              onClick={() => {
+                close()
+                navigate('/connections')
+              }}
+            >
+              <span className="icon text-[20px] text-ink-2">settings</span>
+              Manage connections
+            </button>
           </div>
-        </>
+        </div>
       )}
     </div>
   )

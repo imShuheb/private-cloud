@@ -1,136 +1,165 @@
-import React, { useState, useRef, useEffect } from 'react'
-import { buildPrefix, sortOptions } from '../../lib'
+import type { ReactNode } from 'react'
+import { buildPrefix, cx } from '../../lib'
+import Button, { IconButton } from '../ui/Button'
+import Menu from '../ui/Menu'
 
-type ToolbarProps = {
+export type ViewMode = 'list' | 'grid'
+
+type Props = {
   segments: string[]
-  sortBy: string
-  onSortByChange: (val: string) => void
-  onUpClick: () => void
-  onLoad: (prefix: string) => void
-  parentPrefix: string
-  loading: boolean
-  selectedCount?: number
-  onBulkDelete?: () => void
+  onNavigate: (prefix: string) => void
+  searchQuery?: string
+  view: ViewMode
+  onViewChange: (view: ViewMode) => void
+  selectedCount: number
+  totalCount: number
+  onSelectAll: () => void
+  onClearSelection: () => void
+  onDownloadSelected?: () => void
+  onDeleteSelected?: () => void
+  filters?: ReactNode
 }
 
-const Toolbar: React.FC<ToolbarProps> = ({
+/** Title row (breadcrumbs or search title) and filters; the selection bar takes the title row's place. */
+export default function Toolbar({
   segments,
-  sortBy,
-  onSortByChange,
-  onUpClick,
-  onLoad,
-  parentPrefix,
-  loading,
-  selectedCount = 0,
-  onBulkDelete
-}) => {
-  const [showSortMenu, setShowSortMenu] = useState(false)
-  const sortMenuRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (sortMenuRef.current && !sortMenuRef.current.contains(event.target as Node)) {
-        setShowSortMenu(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
-
-  const currentSort = sortOptions.find(o => o.value === sortBy) || sortOptions[0]
-
+  onNavigate,
+  searchQuery,
+  view,
+  onViewChange,
+  selectedCount,
+  totalCount,
+  onSelectAll,
+  onClearSelection,
+  onDownloadSelected,
+  onDeleteSelected,
+  filters,
+}: Props) {
   return (
-    <div className="sticky top-0 z-10 flex items-center gap-2 px-3 md:px-6 py-2 bg-white border-b border-gray-200">
-      <nav className="flex items-center gap-0.5 text-sm flex-1 min-w-0 overflow-x-auto" aria-label="Breadcrumbs">
-        <button
-          className={`flex items-center gap-1.5 px-3 py-1.5 border font-medium transition-colors whitespace-nowrap ${segments.length === 0 ? 'text-white bg-black border-black' : 'text-black border-transparent hover:border-gray-300 hover:bg-gray-50'}`}
-          onClick={() => onLoad('')}
-        >
-          <span className="material-symbols-outlined !text-lg">home</span>
-          My Drive
-        </button>
-
-        {segments.map((part, i) => (
-          <div key={part + i} className="flex items-center">
-            <span className="text-black">
-              <span className="material-symbols-outlined !text-base">chevron_right</span>
-            </span>
-            <button
-              className={`px-3 py-1.5 border font-medium transition-colors truncate max-w-[150px] whitespace-nowrap ${i === segments.length - 1 ? 'text-white bg-black border-black' : 'text-black border-transparent hover:border-gray-300 hover:bg-gray-50'}`}
-              onClick={() => i < segments.length - 1 && onLoad(buildPrefix(segments, i))}
-            >
-              {part}
-            </button>
-          </div>
-        ))}
-      </nav>
-
-      <div className="flex items-center gap-2 shrink-0">
-        {selectedCount > 0 && (
-          <div className="flex items-center gap-2 px-3 py-1 bg-black text-white border border-black animate-in zoom-in-95 duration-200">
-            <span className="text-[11px] font-bold uppercase tracking-wider whitespace-nowrap">{selectedCount} selected</span>
-            <button
-              className="w-7 h-7 flex items-center justify-center border border-white"
-              onClick={onBulkDelete}
-              title="Delete selected items"
-            >
-              <span className="material-symbols-outlined !text-[18px]">delete_sweep</span>
-            </button>
-          </div>
-        )}
-
-        <div className="h-6 w-px bg-gray-300 mx-1" />
-
-        <div className="relative" ref={sortMenuRef}>
-          <button
-            onClick={() => setShowSortMenu(!showSortMenu)}
-            className="flex items-center gap-2 px-3 py-1.5 text-[13px] font-medium text-black bg-white border border-gray-300 transition-all hover:border-black"
-          >
-            <span className="material-symbols-outlined !text-[18px] text-black">sort</span>
-            <span>{currentSort.label}</span>
-            <span className={`material-symbols-outlined !text-[16px] text-black transition-transform duration-200 ${showSortMenu ? 'rotate-180' : ''}`}>expand_more</span>
-          </button>
-
-          {showSortMenu && (
-            <div className="absolute right-0 mt-1 w-48 bg-white border border-gray-300 shadow-lg z-50 py-1.5 animate-in fade-in zoom-in-95 duration-200">
-              <div className="px-3 py-1.5 text-[10px] font-bold text-black uppercase tracking-widest border-b border-gray-200 mb-1 ">
-                Sort By
-              </div>
-              {sortOptions.map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => {
-                    onSortByChange(opt.value)
-                    setShowSortMenu(false)
-                  }}
-                  className="w-full flex items-center justify-between px-3 py-2 text-[13px] text-black hover:bg-gray-100 transition-colors"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined !text-[18px] opacity-90">
-                      {opt.value.includes('name') ? 'sort_by_alpha' : opt.value.includes('date') ? 'calendar_today' : 'database'}
-                    </span>
-                    <span>{opt.label}</span>
-                  </div>
-                  {sortBy === opt.value && (
-                    <span className="material-symbols-outlined !text-[16px] text-black">check</span>
-                  )}
-                </button>
-              ))}
-            </div>
+    <div className="px-4 sm:px-6 pt-3 pb-2 shrink-0 space-y-2">
+      {selectedCount > 0 ? (
+        <div className="h-12 rounded-full bg-raised flex items-center gap-1 pl-1 pr-2 anim-fade">
+          <IconButton icon="close" label="Clear selection" onClick={onClearSelection} />
+          <span className="text-sm font-medium text-ink mr-1 whitespace-nowrap">{selectedCount} selected</span>
+          {selectedCount < totalCount && (
+            <Button variant="text" className="h-8 px-3" onClick={onSelectAll}>
+              Select all {totalCount}
+            </Button>
+          )}
+          <div className="flex-1" />
+          {onDownloadSelected && <IconButton icon="download" label="Download selected files" onClick={onDownloadSelected} />}
+          {onDeleteSelected && (
+            <Button variant="danger" icon="delete" className="h-9 px-4 ml-1" onClick={onDeleteSelected}>
+              <span className="hidden sm:inline">Delete</span>
+            </Button>
           )}
         </div>
-
-        <button
-          className="w-9 h-9 flex items-center justify-center text-black transition-colors disabled:opacity-30 border border-gray-300 hover:border-black"
-          disabled={!parentPrefix || loading}
-          onClick={onUpClick}
-          title="Go up a level"
-        >
-          <span className="material-symbols-outlined">arrow_upward</span>
-        </button>
-      </div>
+      ) : (
+        <div className="flex items-center gap-2 h-12">
+          {searchQuery ? (
+            <h1 className="text-[22px] sm:text-2xl text-ink truncate flex-1 min-w-0">
+              Results for <span className="text-ink-2">“{searchQuery}”</span>
+            </h1>
+          ) : (
+            <Breadcrumbs segments={segments} onNavigate={onNavigate} />
+          )}
+          <ViewToggle view={view} onViewChange={onViewChange} />
+        </div>
+      )}
+      {filters}
     </div>
   )
 }
 
-export default Toolbar
+function Breadcrumbs({ segments, onNavigate }: { segments: string[]; onNavigate: (prefix: string) => void }) {
+  const current = segments.at(-1)
+  const parent = segments.length > 1 ? buildPrefix(segments, segments.length - 2) : ''
+
+  // Phones: back arrow + current folder name
+  const compact = (
+    <div className="flex sm:hidden items-center gap-1 min-w-0 flex-1">
+      {segments.length > 0 && <IconButton icon="arrow_back" label="Back to parent folder" onClick={() => onNavigate(parent)} className="-ml-2 shrink-0" />}
+      <h1 className="text-[22px] text-ink truncate">{current ?? 'My Drive'}</h1>
+    </div>
+  )
+
+  // Wider screens: full trail, with the middle folded into a menu when it gets long
+  const hidden = segments.length > 3 ? segments.slice(0, segments.length - 2) : []
+  const visibleStart = hidden.length
+  const full = (
+    <nav aria-label="Folder path" className="hidden sm:flex items-center min-w-0 flex-1">
+      <Crumb label="My Drive" current={segments.length === 0} onClick={() => onNavigate('')} />
+      {hidden.length > 0 && (
+        <>
+          <Chevron />
+          <Menu
+            align="left"
+            trigger={({ toggle }) => <IconButton icon="more_horiz" label="Show hidden folders" onClick={toggle} />}
+            items={hidden.map((name, i) => ({ label: name, icon: 'folder', onSelect: () => onNavigate(buildPrefix(segments, i)) }))}
+          />
+        </>
+      )}
+      {segments.slice(visibleStart).map((part, j) => {
+        const i = visibleStart + j
+        return (
+          <span key={`${i}-${part}`} className="flex items-center min-w-0">
+            <Chevron />
+            <Crumb label={part} current={i === segments.length - 1} onClick={() => onNavigate(buildPrefix(segments, i))} />
+          </span>
+        )
+      })}
+    </nav>
+  )
+
+  return (
+    <>
+      {compact}
+      {full}
+    </>
+  )
+}
+
+function Chevron() {
+  return <span className="icon text-ink-2 text-[24px] shrink-0">chevron_right</span>
+}
+
+function Crumb({ label, current, onClick }: { label: string; current: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-current={current ? 'page' : undefined}
+      className={cx(
+        'h-10 px-3 rounded-full truncate min-w-0 font-display text-2xl transition-colors hover:bg-hover',
+        current ? 'text-ink max-w-[320px]' : 'text-ink-2 max-w-[180px] shrink-[2]',
+      )}
+      title={label}
+    >
+      {label}
+    </button>
+  )
+}
+
+function ViewToggle({ view, onViewChange }: { view: ViewMode; onViewChange: (v: ViewMode) => void }) {
+  return (
+    <div className="flex items-center rounded-full border border-[#747775] overflow-hidden shrink-0" role="group" aria-label="Layout">
+      {(
+        [
+          ['list', 'view_list', 'List layout'],
+          ['grid', 'grid_view', 'Grid layout'],
+        ] as const
+      ).map(([value, icon, label]) => (
+        <button
+          key={value}
+          onClick={() => onViewChange(value)}
+          aria-pressed={view === value}
+          aria-label={label}
+          title={label}
+          className={cx('h-8 w-12 sm:w-14 flex items-center justify-center gap-1 transition-colors', view === value ? 'bg-primary-soft text-on-primary-soft' : 'text-ink-2 hover:bg-hover')}
+        >
+          {view === value && <span className="icon text-[16px] hidden sm:inline">check</span>}
+          <span className="icon text-[20px]">{icon}</span>
+        </button>
+      ))}
+    </div>
+  )
+}

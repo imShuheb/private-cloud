@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"sync"
@@ -62,21 +63,39 @@ func (m *sessionManager) get(id string) (session, bool) {
 	return s, true
 }
 
-func (m *sessionManager) isValid(id string) bool {
-	m.mu.RLock()
-	s, ok := m.sessions[id]
-	m.mu.RUnlock()
-	if !ok {
-		return false
+// cleanupLoop removes expired sessions every interval until ctx is done.
+func (m *sessionManager) cleanupLoop(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.removeExpired(time.Now())
+		}
 	}
+}
 
-	if time.Now().After(s.expiresAt) {
-		m.mu.Lock()
-		delete(m.sessions, id)
-		m.mu.Unlock()
-		return false
+func (m *sessionManager) removeExpired(now time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, s := range m.sessions {
+		if now.After(s.expiresAt) {
+			delete(m.sessions, id)
+		}
 	}
-	return true
+}
+
+// deleteUser signs a user out everywhere.
+func (m *sessionManager) deleteUser(userID int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, s := range m.sessions {
+		if s.userID == userID {
+			delete(m.sessions, id)
+		}
+	}
 }
 
 func (m *sessionManager) delete(id string) {

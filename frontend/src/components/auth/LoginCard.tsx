@@ -1,42 +1,28 @@
-import React from 'react'
+import type { ReactNode } from 'react'
 
-type LoginCardProps = {
-  children: React.ReactNode
-}
-
-const LoginCard: React.FC<LoginCardProps> = ({ children }) => {
+/** Centered sign-in layout: brand mark, one focused card, short reassurance line. */
+export default function LoginCard({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-screen flex items-center justify-center p-6 bg-white selection:bg-black selection:text-white">
-      <div className="w-full max-w-[480px] bg-white border border-gray-300 p-8 sm:p-12 text-center shadow-xl animate-in fade-in zoom-in-95 duration-500">
-        {/* Logo Section */}
-        <div className="flex items-center justify-center gap-3 mb-3">
-          <div className="w-12 h-12 border border-black bg-black flex items-center justify-center">
-            <span className="material-symbols-outlined filled text-3xl text-white">cloud</span>
-          </div>
-          <span className="text-[26px] text-gray-900 font-semibold tracking-tight">Private Storage</span>
+    <div className="min-h-full flex flex-col items-center justify-center px-4 py-10 bg-app bg-[radial-gradient(1200px_600px_at_50%_-10%,#dbe8ff_0%,transparent_60%)]">
+      <div className="w-full max-w-[420px] anim-pop">
+        <div className="flex items-center justify-center gap-3 mb-8">
+          <span className="w-12 h-12 rounded-2xl bg-primary flex items-center justify-center shadow-card">
+            <span className="icon filled text-[28px] text-white">cloud</span>
+          </span>
+          <span className="font-display text-[24px] text-ink">Private Storage</span>
         </div>
 
-        <h1 className="text-2xl text-gray-900 mt-6 mb-2 font-semibold">Welcome back</h1>
-        <p className="text-[15px] text-gray-600 mb-10 leading-relaxed font-normal">
-          Manage your files securely in your personal encrypted vault.
+        <div className="bg-surface rounded-[28px] shadow-card px-6 py-8 sm:px-10 sm:py-10">
+          <h1 className="text-[28px] leading-9 text-ink text-center">Welcome back</h1>
+          <p className="text-sm text-ink-2 text-center mt-2 mb-8">Sign in to your drive</p>
+          {children}
+        </div>
+
+        <p className="flex items-center justify-center gap-1.5 text-xs text-ink-3 mt-6">
+          <span className="icon text-[16px]">lock</span>
+          Files stay in your own S3-compatible storage
         </p>
-
-        {children}
-
-        {/* Footer info */}
-        <div className="mt-12 pt-8 border-t border-gray-200 flex items-center justify-center gap-6">
-          <div className="flex items-center gap-1.5 text-xs text-gray-500 font-medium tracking-tight">
-            <span className="material-symbols-outlined !text-sm">lock</span>
-            SECURED
-          </div>
-          <div className="flex items-center gap-1.5 text-xs text-gray-500 font-medium tracking-tight">
-            <span className="material-symbols-outlined !text-sm">verified_user</span>
-            S3 VAULT
-          </div>
-        </div>
       </div>
     </div>
   )
 }
-
-export default LoginCard

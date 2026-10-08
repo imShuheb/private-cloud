@@ -1,97 +1,120 @@
-import React from 'react'
+import { useState } from 'react'
+import { cx, formatBytes, getFileIcon } from '../../lib'
+import type { UploadItem } from '../../hooks/useUploads'
 
-export type UploadStatus = {
-  id: string
-  name: string
-  progress: number
-  status: 'uploading' | 'completed' | 'error'
-  error?: string
-}
-
-type UploadTrayProps = {
-  uploads: UploadStatus[]
+type Props = {
+  items: UploadItem[]
+  onCancel: (id: string) => void
+  onCancelAll: () => void
   onClose: () => void
 }
 
-const UploadTray: React.FC<UploadTrayProps> = ({ uploads, onClose }) => {
-  if (uploads.length === 0) return null
+/** Drive-style upload panel, bottom right, collapsible. */
+export default function UploadTray({ items, onCancel, onCancelAll, onClose }: Props) {
+  const [collapsed, setCollapsed] = useState(false)
+  if (items.length === 0) return null
 
-  const completedCount = uploads.filter(u => u.status === 'completed').length
-  const isAllDone = completedCount === uploads.length
-  const totalProgress = uploads.reduce((acc, u) => acc + u.progress, 0) / uploads.length
+  const active = items.filter((u) => u.status === 'queued' || u.status === 'uploading').length
+  const failed = items.filter((u) => u.status === 'error').length
+  const done = items.filter((u) => u.status === 'done').length
+  const title =
+    active > 0
+      ? `Uploading ${active} item${active === 1 ? '' : 's'}`
+      : failed > 0
+        ? `${failed} upload${failed === 1 ? '' : 's'} failed`
+        : `${done} upload${done === 1 ? '' : 's'} complete`
 
   return (
-    <div className="fixed bottom-3 right-3 md:bottom-6 md:right-6 w-[calc(100vw-1.5rem)] max-w-96 bg-white border border-gray-300 shadow-xl flex flex-col overflow-hidden animate-in slide-in-from-right-8 duration-300 z-50">
-      <div className="flex items-center justify-between px-5 py-3.5 bg-black text-white">
-        <div className="flex items-center gap-2">
-          {isAllDone ? (
-            <span className="material-symbols-outlined text-white text-xl">check_circle</span>
-          ) : (
-            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-          )}
-          <span className="text-[13px] font-semibold tracking-wide">
-            {isAllDone ? `${uploads.length} uploads complete` : `Uploading ${uploads.length} items`}
-          </span>
-        </div>
-        <button 
-          onClick={onClose}
-          className="w-8 h-8 flex items-center justify-center border border-white/30 transition-colors hover:border-white"
+    <section
+      aria-label="Uploads"
+      className="fixed bottom-0 right-0 sm:right-6 w-full sm:w-[360px] bg-surface rounded-t-2xl shadow-raised z-[140] anim-slide-up overflow-hidden"
+    >
+      <header className="flex items-center gap-1 h-14 pl-5 pr-2 bg-raised">
+        <h2 className="flex-1 text-[15px] font-medium text-ink">{title}</h2>
+        <button
+          className="w-9 h-9 rounded-full flex items-center justify-center text-ink-2 hover:bg-hover"
+          onClick={() => setCollapsed((c) => !c)}
+          aria-label={collapsed ? 'Expand' : 'Minimise'}
         >
-          <span className="material-symbols-outlined !text-xl">close</span>
+          <span className={cx('icon transition-transform', collapsed && 'rotate-180')}>expand_more</span>
         </button>
-      </div>
+        <button
+          className="w-9 h-9 rounded-full flex items-center justify-center text-ink-2 hover:bg-hover"
+          onClick={() => {
+            if (active > 0) onCancelAll()
+            onClose()
+          }}
+          aria-label={active > 0 ? 'Cancel all uploads' : 'Close'}
+          title={active > 0 ? 'Cancel all uploads' : 'Close'}
+        >
+          <span className="icon">close</span>
+        </button>
+      </header>
 
-      <div className="max-h-72 overflow-y-auto bg-white divide-y divide-gray-100">
-        {uploads.map((upload) => (
-          <div key={upload.id} className="px-5 py-4 hover:bg-gray-50 transition-colors">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-3 min-w-0">
-                <span className="material-symbols-outlined text-black text-lg shrink-0">
-                  {upload.name.includes('.') ? 'description' : 'folder'}
-                </span>
-                <span className="text-[13px] text-black font-medium truncate" title={upload.name}>
-                  {upload.name}
-                </span>
-              </div>
-              <span className="text-[11px] font-bold text-black tabular-nums">
-                {upload.status === 'completed' ? 'Done' : `${Math.round(upload.progress)}%`}
-              </span>
-            </div>
-            
-            <div className="h-1.5 w-full bg-gray-200 overflow-hidden">
-              <div 
-                className={`h-full transition-all duration-300 ${
-                  upload.status === 'error' ? 'bg-black' : 
-                  upload.status === 'completed' ? 'bg-black' : 'bg-black'
-                }`}
-                style={{ width: `${upload.progress}%` }}
-              />
-            </div>
-            {upload.status === 'error' && (
-              <p className="mt-1.5 text-[10px] text-black font-medium">{upload.error}</p>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {!isAllDone && (
-        <div className="px-5 py-2.5 bg-white border-t border-black">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[10px] font-bold text-black uppercase tracking-widest">Overall Progress</span>
-            <span className="text-[10px] font-bold text-black tracking-wider">
-              {completedCount} of {uploads.length} complete
-            </span>
-          </div>
-          <div className="h-1 w-full bg-gray-200 overflow-hidden">
-            <div 
-              className="h-full bg-black transition-all duration-300"
-              style={{ width: `${totalProgress}%` }}
-            />
-          </div>
-        </div>
+      {!collapsed && (
+        <ul className="max-h-[300px] overflow-y-auto scroll-thin">
+          {items.map((u) => {
+            const icon = getFileIcon(u.name)
+            return (
+              <li key={u.id} className="group flex items-center gap-3 h-14 px-5 hover:bg-hover">
+                <span className={cx('icon', icon.className)}>{icon.icon}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-ink truncate" title={u.name}>
+                    {u.name}
+                  </div>
+                  <div className={cx('text-xs truncate', u.status === 'error' ? 'text-danger' : 'text-ink-3')}>
+                    {u.status === 'error'
+                      ? u.error
+                      : u.status === 'cancelled'
+                        ? 'Cancelled'
+                        : u.status === 'queued'
+                          ? `Waiting · ${formatBytes(u.size)}`
+                          : u.status === 'done'
+                            ? formatBytes(u.size)
+                            : `${u.progress}% of ${formatBytes(u.size)}`}
+                  </div>
+                </div>
+                <StatusIcon item={u} onCancel={() => onCancel(u.id)} />
+              </li>
+            )
+          })}
+        </ul>
       )}
-    </div>
+    </section>
   )
 }
 
-export default UploadTray
+function StatusIcon({ item, onCancel }: { item: UploadItem; onCancel: () => void }) {
+  if (item.status === 'done') return <span className="icon filled text-success">check_circle</span>
+  if (item.status === 'error') return <span className="icon filled text-danger">error</span>
+  if (item.status === 'cancelled') return <span className="icon text-ink-3">block</span>
+
+  const r = 9
+  const circumference = 2 * Math.PI * r
+  return (
+    <div className="relative w-8 h-8 flex items-center justify-center">
+      <svg viewBox="0 0 24 24" className="w-6 h-6 -rotate-90 group-hover:opacity-0" aria-hidden>
+        <circle cx="12" cy="12" r={r} fill="none" stroke="var(--color-line-soft)" strokeWidth="3" />
+        <circle
+          cx="12"
+          cy="12"
+          r={r}
+          fill="none"
+          stroke="var(--color-primary)"
+          strokeWidth="3"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - item.progress / 100)}
+          className="transition-[stroke-dashoffset] duration-200"
+        />
+      </svg>
+      <button
+        onClick={onCancel}
+        aria-label={`Cancel ${item.name}`}
+        className="absolute inset-0 rounded-full flex items-center justify-center text-ink-2 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-press"
+      >
+        <span className="icon text-[20px]">close</span>
+      </button>
+    </div>
+  )
+}

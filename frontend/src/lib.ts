@@ -1,49 +1,67 @@
-import type { FileInfo, FolderInfo } from './types'
+import type { Category, DriveItem } from './types'
 
-export const sortOptions = [
-  { label: 'Name A–Z', value: 'name-asc' },
-  { label: 'Name Z–A', value: 'name-desc' },
-  { label: 'Size ↓', value: 'size-desc' },
-  { label: 'Size ↑', value: 'size-asc' },
-  { label: 'Newest first', value: 'date-desc' },
-  { label: 'Oldest first', value: 'date-asc' },
-] as const
+/** Must match the server's minimum (internal/api/handlers_users.go). */
+export const MIN_PASSWORD_LENGTH = 8
+
+export type SortField = 'name' | 'size' | 'modified'
+export type SortDir = 'asc' | 'desc'
 
 export function formatBytes(size = 0): string {
-  if (size <= 0) return '–'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  if (!Number.isFinite(size) || size <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
   const p = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1)
   const value = size / Math.pow(1024, p)
   return `${value.toFixed(value < 10 && p > 0 ? 1 : 0)} ${units[p]}`
 }
 
+const countFormat = new Intl.NumberFormat()
+export function formatCount(n = 0): string {
+  return countFormat.format(n)
+}
+
+export function formatPercent(part: number, total: number): string {
+  if (total <= 0) return '0%'
+  const pct = (part / total) * 100
+  if (pct > 0 && pct < 0.1) return '<0.1%'
+  return `${pct.toFixed(pct < 10 ? 1 : 0)}%`
+}
+
+/** Drive-style short date: time today, "Yesterday", "Mar 4", or "Mar 4, 2024". */
 export function formatDate(v?: string): string {
-  if (!v) return '–'
+  if (!v) return '—'
   const d = new Date(v)
-  if (Number.isNaN(d.getTime())) return '–'
-
+  if (Number.isNaN(d.getTime()) || d.getTime() <= 0) return '—'
   const now = new Date()
-  const diff = now.getTime() - d.getTime()
-
-  // Less than a minute
-  if (diff < 60_000) return 'Just now'
-  // Less then an hour
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} min ago`
-  // Same day
   if (d.toDateString() === now.toDateString()) {
-    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
   }
-  // Yesterday
   const yesterday = new Date(now)
   yesterday.setDate(now.getDate() - 1)
-  if (d.toDateString() === yesterday.toDateString()) {
-    return 'Yesterday'
-  }
-  // Same year
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
   if (d.getFullYear() === now.getFullYear()) {
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
   }
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+}
+
+export function formatDateTime(v?: string): string {
+  if (!v) return '—'
+  const d = new Date(v)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+export function relativeTime(v?: string | null): string {
+  if (!v) return 'never'
+  const diff = Date.now() - new Date(v).getTime()
+  if (Number.isNaN(diff)) return 'never'
+  if (diff < 45_000) return 'just now'
+  const minutes = Math.round(diff / 60_000)
+  if (minutes < 60) return `${minutes} min ago`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours} h ago`
+  const days = Math.round(hours / 24)
+  return `${days} day${days === 1 ? '' : 's'} ago`
 }
 
 export function pathSegments(prefix: string): string[] {
@@ -54,107 +72,147 @@ export function buildPrefix(parts: string[], idx: number): string {
   return parts.slice(0, idx + 1).join('/') + '/'
 }
 
-export function filterFolders(items: FolderInfo[], query: string, sortBy?: string): FolderInfo[] {
-  const q = query.trim().toLowerCase()
-  const list = items.filter((f) => !q || f.name.toLowerCase().includes(q))
-  
-  const sorted = [...list].sort((a, b) => a.name.localeCompare(b.name))
-  if (sortBy?.endsWith('-desc')) {
-    return sorted.reverse()
-  }
-  return sorted
+/** "a/b/" → "a / b", "" → "My Drive". */
+export function folderLabel(prefix: string): string {
+  const parts = pathSegments(prefix)
+  return parts.length ? parts.join(' / ') : 'My Drive'
 }
 
-export function filterSortFiles(items: FileInfo[], query: string, sortBy: string): FileInfo[] {
-  const q = query.trim().toLowerCase()
-  const list = items.filter((f) => !q || (f.name || f.key).toLowerCase().includes(q))
-
-  const byName = (a: FileInfo, b: FileInfo) => (a.name || a.key).localeCompare(b.name || b.key)
-  const bySize = (a: FileInfo, b: FileInfo) => (a.size || 0) - (b.size || 0)
-  const byDate = (a: FileInfo, b: FileInfo) => new Date(a.lastModified || 0).getTime() - new Date(b.lastModified || 0).getTime()
-
-  let sorted = [...list]
-  const [field, direction] = sortBy.split('-')
-
-  switch (field) {
-    case 'size':
-      sorted.sort(bySize)
-      break
-    case 'date':
-      sorted.sort(byDate)
-      break
-    default:
-      sorted.sort(byName)
-  }
-
-  if (direction === 'desc') {
-    sorted.reverse()
-  }
-
-  return sorted
+export function parentOf(key: string): string {
+  const trimmed = key.endsWith('/') ? key.slice(0, -1) : key
+  const i = trimmed.lastIndexOf('/')
+  return i < 0 ? '' : trimmed.slice(0, i + 1)
 }
 
-/** Return the Material Symbol icon name & CSS modifier class for a file extension */
+export function baseName(key: string): string {
+  const trimmed = key.endsWith('/') ? key.slice(0, -1) : key
+  return trimmed.slice(trimmed.lastIndexOf('/') + 1) || key
+}
+
+/** Folders first (like Drive), then the chosen order. */
+export function sortItems(items: DriveItem[], field: SortField, dir: SortDir): DriveItem[] {
+  const factor = dir === 'asc' ? 1 : -1
+  const byName = (a: DriveItem, b: DriveItem) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+  return [...items].sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1
+    if (a.kind === 'file' && b.kind === 'file') {
+      if (field === 'size' && a.size !== b.size) return (a.size - b.size) * factor
+      if (field === 'modified') {
+        const diff = new Date(a.lastModified).getTime() - new Date(b.lastModified).getTime()
+        if (diff !== 0) return diff * factor
+      }
+    }
+    return byName(a, b) * (field === 'name' ? factor : 1)
+  })
+}
+
+const iconByExt: Record<string, { icon: string; className: string }> = {}
+const groups: Array<[string[], string, string]> = [
+  [['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico', 'heic', 'avif', 'tif', 'tiff'], 'image', 'file-image'],
+  [['mp4', 'mkv', 'avi', 'mov', 'webm', 'm4v', 'wmv', 'ts', 'mpg', 'mpeg'], 'movie', 'file-video'],
+  [['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac', 'opus'], 'audio_file', 'file-audio'],
+  [['doc', 'docx', 'txt', 'rtf', 'md', 'odt', 'pages'], 'description', 'file-doc'],
+  [['xls', 'xlsx', 'csv', 'ods', 'numbers'], 'table_chart', 'file-sheet'],
+  [['ppt', 'pptx', 'odp', 'key'], 'slideshow', 'file-pdf'],
+  [['pdf'], 'picture_as_pdf', 'file-pdf'],
+  [['zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2', 'xz', 'iso', 'dmg'], 'folder_zip', 'file-zip'],
+  [['js', 'jsx', 'tsx', 'py', 'go', 'rs', 'java', 'c', 'cpp', 'cs', 'rb', 'php', 'html', 'css', 'xml', 'sh'], 'code', 'file-code'],
+  [['json'], 'data_object', 'file-code'],
+  [['sql'], 'database', 'file-code'],
+  [['yaml', 'yml', 'toml', 'ini', 'env'], 'settings', 'file-code'],
+]
+for (const [exts, icon, className] of groups) {
+  for (const ext of exts) iconByExt[ext] = { icon, className }
+}
+
 export function getFileIcon(name: string): { icon: string; className: string } {
-  const ext = name.split('.').pop()?.toLowerCase() || ''
+  const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : ''
+  return iconByExt[ext] ?? { icon: 'draft', className: 'file-default' }
+}
 
-  const map: Record<string, { icon: string; className: string }> = {
-    // Images
-    jpg: { icon: 'image', className: 'file-icon-img' },
-    jpeg: { icon: 'image', className: 'file-icon-img' },
-    png: { icon: 'image', className: 'file-icon-img' },
-    gif: { icon: 'gif_box', className: 'file-icon-img' },
-    webp: { icon: 'image', className: 'file-icon-img' },
-    svg: { icon: 'image', className: 'file-icon-img' },
-    bmp: { icon: 'image', className: 'file-icon-img' },
-    ico: { icon: 'image', className: 'file-icon-img' },
-    // Video
-    mp4: { icon: 'movie', className: 'file-icon-video' },
-    mkv: { icon: 'movie', className: 'file-icon-video' },
-    avi: { icon: 'movie', className: 'file-icon-video' },
-    mov: { icon: 'movie', className: 'file-icon-video' },
-    webm: { icon: 'movie', className: 'file-icon-video' },
-    // Audio
-    mp3: { icon: 'audio_file', className: 'file-icon-audio' },
-    wav: { icon: 'audio_file', className: 'file-icon-audio' },
-    flac: { icon: 'audio_file', className: 'file-icon-audio' },
-    ogg: { icon: 'audio_file', className: 'file-icon-audio' },
-    // Documents
-    doc: { icon: 'description', className: 'file-icon-doc' },
-    docx: { icon: 'description', className: 'file-icon-doc' },
-    txt: { icon: 'description', className: 'file-icon-doc' },
-    rtf: { icon: 'description', className: 'file-icon-doc' },
-    md: { icon: 'description', className: 'file-icon-doc' },
-    // Spreadsheets
-    xls: { icon: 'table_chart', className: 'file-icon-sheet' },
-    xlsx: { icon: 'table_chart', className: 'file-icon-sheet' },
-    csv: { icon: 'table_chart', className: 'file-icon-sheet' },
-    // PDF
-    pdf: { icon: 'picture_as_pdf', className: 'file-icon-pdf' },
-    // Archives
-    zip: { icon: 'folder_zip', className: 'file-icon-zip' },
-    rar: { icon: 'folder_zip', className: 'file-icon-zip' },
-    '7z': { icon: 'folder_zip', className: 'file-icon-zip' },
-    tar: { icon: 'folder_zip', className: 'file-icon-zip' },
-    gz: { icon: 'folder_zip', className: 'file-icon-zip' },
-    // Code
-    js: { icon: 'code', className: 'file-icon-code' },
-    ts: { icon: 'code', className: 'file-icon-code' },
-    jsx: { icon: 'code', className: 'file-icon-code' },
-    tsx: { icon: 'code', className: 'file-icon-code' },
-    py: { icon: 'code', className: 'file-icon-code' },
-    go: { icon: 'code', className: 'file-icon-code' },
-    rs: { icon: 'code', className: 'file-icon-code' },
-    java: { icon: 'code', className: 'file-icon-code' },
-    json: { icon: 'data_object', className: 'file-icon-code' },
-    xml: { icon: 'code', className: 'file-icon-code' },
-    html: { icon: 'code', className: 'file-icon-code' },
-    css: { icon: 'code', className: 'file-icon-code' },
-    sql: { icon: 'database', className: 'file-icon-code' },
-    yaml: { icon: 'settings', className: 'file-icon-code' },
-    yml: { icon: 'settings', className: 'file-icon-code' },
-    toml: { icon: 'settings', className: 'file-icon-code' },
+export const categoryMeta: Record<Category, { label: string; color: string; icon: string }> = {
+  video: { label: 'Videos', color: 'var(--color-cat-video)', icon: 'movie' },
+  image: { label: 'Images', color: 'var(--color-cat-image)', icon: 'image' },
+  audio: { label: 'Audio', color: 'var(--color-cat-audio)', icon: 'audio_file' },
+  document: { label: 'Documents', color: 'var(--color-cat-document)', icon: 'description' },
+  archive: { label: 'Archives', color: 'var(--color-cat-archive)', icon: 'folder_zip' },
+  code: { label: 'Code & data', color: 'var(--color-cat-code)', icon: 'code' },
+  other: { label: 'Other', color: 'var(--color-cat-other)', icon: 'draft' },
+}
+
+/** Fixed category order: colours are validated for these neighbours, so stacks never re-order. */
+export const categoryOrder: Category[] = ['video', 'image', 'audio', 'document', 'archive', 'code', 'other']
+
+export function cx(...classes: Array<string | false | null | undefined>): string {
+  return classes.filter(Boolean).join(' ')
+}
+
+const categoryByExt: Record<string, Category> = {}
+const categoryGroups: Array<[Category, string[]]> = [
+  ['image', ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico', 'heic', 'heif', 'tif', 'tiff', 'raw', 'avif']],
+  ['video', ['mp4', 'mkv', 'avi', 'mov', 'webm', 'm4v', 'wmv', 'flv', 'ts', 'm2ts', 'mpg', 'mpeg', '3gp']],
+  ['audio', ['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac', 'opus', 'wma', 'aiff']],
+  ['document', ['pdf', 'doc', 'docx', 'txt', 'rtf', 'md', 'odt', 'xls', 'xlsx', 'csv', 'ods', 'ppt', 'pptx', 'odp', 'pages', 'numbers', 'key', 'epub']],
+  ['archive', ['zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2', 'xz', 'zst', 'iso', 'dmg']],
+  ['code', ['js', 'jsx', 'tsx', 'py', 'go', 'rs', 'java', 'kt', 'c', 'h', 'cpp', 'cs', 'rb', 'php', 'json', 'xml', 'html', 'css', 'sql', 'yaml', 'yml', 'toml', 'sh']],
+]
+for (const [category, exts] of categoryGroups) for (const ext of exts) categoryByExt[ext] = category
+
+/** Same grouping as the server's analytics (internal/analytics), by file extension. */
+export function fileCategory(name: string): Category {
+  const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : ''
+  return categoryByExt[ext] ?? 'other'
+}
+
+export type ModifiedRange = '' | 'today' | '7d' | '30d' | 'year' | 'older'
+
+export const modifiedRanges: Array<{ value: Exclude<ModifiedRange, ''>; label: string }> = [
+  { value: 'today', label: 'Today' },
+  { value: '7d', label: 'Last 7 days' },
+  { value: '30d', label: 'Last 30 days' },
+  { value: 'year', label: 'This year' },
+  { value: 'older', label: 'Before this year' },
+]
+
+export function inModifiedRange(iso: string, range: ModifiedRange, now = new Date()): boolean {
+  if (!range) return true
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return false
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const startOfYear = new Date(now.getFullYear(), 0, 1).getTime()
+  const t = d.getTime()
+  switch (range) {
+    case 'today':
+      return t >= startOfToday
+    case '7d':
+      return t >= startOfToday - 6 * 86_400_000
+    case '30d':
+      return t >= startOfToday - 29 * 86_400_000
+    case 'year':
+      return t >= startOfYear
+    case 'older':
+      return t < startOfYear
   }
+}
 
-  return map[ext] || { icon: 'draft', className: 'file-icon-default' }
+export type PreviewKind = 'image' | 'svg' | 'video' | 'audio' | 'pdf' | 'text' | 'none'
+
+const previewByExt: Record<string, PreviewKind> = {}
+const previewGroups: Array<[PreviewKind, string[]]> = [
+  ['image', ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'ico', 'avif']],
+  ['svg', ['svg']],
+  ['video', ['mp4', 'webm', 'm4v', 'mov', 'ogv']],
+  ['audio', ['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opus']],
+  ['pdf', ['pdf']],
+  [
+    'text',
+    ['txt', 'md', 'markdown', 'csv', 'tsv', 'log', 'json', 'xml', 'yaml', 'yml', 'toml', 'ini', 'env', 'js', 'jsx', 'ts', 'tsx', 'go', 'py', 'rb', 'rs', 'java', 'kt', 'c', 'h', 'cpp', 'cs', 'php', 'css', 'scss', 'html', 'sh', 'sql', 'conf'],
+  ],
+]
+for (const [kind, exts] of previewGroups) for (const ext of exts) previewByExt[ext] = kind
+
+/** What the in-app viewer can show for a file name (by extension). */
+export function previewKind(name: string): PreviewKind {
+  const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : ''
+  return previewByExt[ext] ?? 'none'
 }
