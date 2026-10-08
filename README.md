@@ -132,7 +132,7 @@ While storage is managed via the UI, you can set these environment variables in 
 | `SFTP_ADDR` | SFTP bind address | `0.0.0.0:2022` |
 | `TLS_CERT_FILE` | Path to TLS cert PEM (enables HTTPS when set with key) | empty |
 | `TLS_KEY_FILE` | Path to TLS private key PEM | empty |
-| `APP_SECRET` | Secret used for credential encryption | (Auto-generated) |
+| `APP_SECRET` | Secret used for credential encryption (any length; e.g. `openssl rand -hex 32`) | Random key generated in `config/app.key` |
 
 Notes:
 - If `TLS_CERT_FILE` + `TLS_KEY_FILE` are set, server starts with HTTPS.
@@ -159,7 +159,7 @@ npm run dev
 ## 🔐 Security Note
 All storage credentials added through the dashboard are stored in SQLite (`config/private-storage.db`). To protect these keys, the application encrypts access/secret keys at rest using AES-GCM. For production deployments:
 
-- set a custom `APP_SECRET`
+- set a custom `APP_SECRET` (without it, a random key is generated in `config/app.key`; back it up together with the database, since credentials can't be decrypted without it)
 - run behind HTTPS (or set `TLS_CERT_FILE` + `TLS_KEY_FILE`)
 - set `ADMIN_API_KEY` only if you need token-based API access
 

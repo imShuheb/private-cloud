@@ -1,13 +1,9 @@
 package appconfig
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"database/sql"
-	"encoding/base64"
 	"errors"
-	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,72 +67,9 @@ type Config struct {
 
 const configDir = "config"
 const dbFile = "config/private-storage.db"
-const encPrefix = "enc:"
-
-// masterKey should ideally be from an env var
-var masterKey = []byte("private-storage-32-byte-key-0123")
 
 var ErrLastOwner = errors.New("cannot deactivate the last owner")
 var ErrUserNotFound = errors.New("user not found")
-
-func init() {
-	if k := os.Getenv("APP_SECRET"); len(k) >= 16 {
-		// Use hash of secret for stable 32-byte key if provided
-		masterKey = []byte(k[:32])
-		if len(masterKey) < 32 {
-			padding := make([]byte, 32-len(masterKey))
-			masterKey = append(masterKey, padding...)
-		}
-	}
-}
-
-func encrypt(plaintext string) (string, error) {
-	if plaintext == "" || strings.HasPrefix(plaintext, encPrefix) {
-		return plaintext, nil
-	}
-	block, err := aes.NewCipher(masterKey)
-	if err != nil {
-		return "", err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", err
-	}
-	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
-	return encPrefix + base64.StdEncoding.EncodeToString(ciphertext), nil
-}
-
-func decrypt(cipherText string) string {
-	if !strings.HasPrefix(cipherText, encPrefix) {
-		return cipherText
-	}
-	data, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(cipherText, encPrefix))
-	if err != nil {
-		return cipherText
-	}
-	block, err := aes.NewCipher(masterKey)
-	if err != nil {
-		return cipherText
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return cipherText
-	}
-	nonceSize := gcm.NonceSize()
-	if len(data) < nonceSize {
-		return cipherText
-	}
-	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return cipherText
-	}
-	return string(plaintext)
-}
 
 func Load() (*Config, error) {
 	_ = godotenv.Load()
@@ -146,6 +79,11 @@ func Load() (*Config, error) {
 	}
 
 	dbPath := getEnv("CONFIG_DB_PATH", dbFile)
+	// After godotenv.Load, so an APP_SECRET in .env is honoured
+	if err := initKeys(dbPath); err != nil {
+		return nil, err
+	}
+
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, err
@@ -175,6 +113,15 @@ func Load() (*Config, error) {
 		}
 	} else {
 		cfg.db = db
+		if legacyDecrypts > 0 {
+			// Re-encrypt credentials written by older versions with the current key
+			if err := cfg.Save(); err != nil {
+				_ = db.Close()
+				return nil, err
+			}
+			log.Printf("Re-encrypted %d stored credential(s) with the current encryption key", legacyDecrypts)
+			legacyDecrypts = 0
+		}
 	}
 
 	cfg.AdminAPIKey = strings.TrimSpace(os.Getenv("ADMIN_API_KEY"))

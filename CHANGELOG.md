@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] - 08/10/2026
+
+### Security
+- Credentials are no longer encrypted with a built-in key when `APP_SECRET` is not set. A random key is generated on first start and stored as `config/app.key` (mode 0600) next to the database.
+- The encryption key is now derived from `APP_SECRET` with SHA-256, so any length works.
+- Existing credentials encrypted with the old key are decrypted and re-encrypted with the new key on first start.
+
+### Fixed
+- Startup crash when `APP_SECRET` was 16–31 characters long.
+- `APP_SECRET` set in `.env` was ignored (it was read before `.env` was loaded).
+- A credential that can't be decrypted is now logged instead of failing silently.
+
 ## [1.2.1] - 19/04/2026
 
 ### Added
