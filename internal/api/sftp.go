@@ -3,16 +3,20 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/rsa"
 	"encoding/binary"
+	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,11 +28,46 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+const (
+	sftpHostKeyFile      = "sftp_host_ed25519_key"
+	sftpHandshakeTimeout = 30 * time.Second
+	sftpMaxConns         = 32
+	sftpMaxConnsPerIP    = 8
+	sftpMaxAuthTries     = 3
+)
+
 type sftpController struct {
 	mu     sync.Mutex
 	server *Server
 	ln     net.Listener
 	config sftpRuntimeConfig
+	signer ssh.Signer
+	// slots caps concurrent connections, including ones still in the handshake
+	slots chan struct{}
+	// perIP counts open connections per client address
+	ipMu  sync.Mutex
+	perIP map[string]int
+}
+
+// acquireIP reserves a connection for ip, or reports false if it already has too many.
+func (c *sftpController) acquireIP(ip string) bool {
+	c.ipMu.Lock()
+	defer c.ipMu.Unlock()
+	if c.perIP[ip] >= sftpMaxConnsPerIP {
+		return false
+	}
+	c.perIP[ip]++
+	return true
+}
+
+func (c *sftpController) releaseIP(ip string) {
+	c.ipMu.Lock()
+	defer c.ipMu.Unlock()
+	if c.perIP[ip] <= 1 {
+		delete(c.perIP, ip)
+		return
+	}
+	c.perIP[ip]--
 }
 
 type sftpRuntimeConfig struct {
@@ -37,7 +76,7 @@ type sftpRuntimeConfig struct {
 }
 
 func newSFTPController(server *Server) *sftpController {
-	return &sftpController{server: server}
+	return &sftpController{server: server, slots: make(chan struct{}, sftpMaxConns), perIP: map[string]int{}}
 }
 
 func (s *Server) applySFTPFromConfig() error {
@@ -72,46 +111,19 @@ func (c *sftpController) apply(cfg sftpRuntimeConfig) error {
 		cfg.addr = "0.0.0.0:2022"
 	}
 
-	signer, err := generateHostSigner()
-	if err != nil {
-		return err
+	if c.signer == nil {
+		signer, err := loadOrCreateHostSigner(appconfig.Dir())
+		if err != nil {
+			return err
+		}
+		c.signer = signer
 	}
 
 	sshConfig := &ssh.ServerConfig{
-		PasswordCallback: func(meta ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
-			username := strings.TrimSpace(meta.User())
-			if username == "" {
-				return nil, errors.New("unauthorized")
-			}
-
-			c.server.mu.RLock()
-			user, ok, err := c.server.cfg.VerifyUserPassword(username, string(pass))
-			c.server.mu.RUnlock()
-			if err != nil || !ok || user == nil {
-				return nil, errors.New("unauthorized")
-			}
-
-			if !user.Permissions.CanReadFiles {
-				return nil, errors.New("unauthorized")
-			}
-
-			if !user.Permissions.CanUseSFTP {
-				return nil, errors.New("unauthorized")
-			}
-
-			ext := map[string]string{
-				"username":               user.Username,
-				"role":                   user.Role,
-				"can_read_files":         boolToExt(user.Permissions.CanReadFiles),
-				"can_write_files":        boolToExt(user.Permissions.CanWriteFiles),
-				"can_manage_connections": boolToExt(user.Permissions.CanManageConnections),
-				"can_manage_settings":    boolToExt(user.Permissions.CanManageSettings),
-				"can_use_sftp":           boolToExt(user.Permissions.CanUseSFTP),
-			}
-			return &ssh.Permissions{Extensions: ext}, nil
-		},
+		MaxAuthTries:     sftpMaxAuthTries,
+		PasswordCallback: c.checkPassword,
 	}
-	sshConfig.AddHostKey(signer)
+	sshConfig.AddHostKey(c.signer)
 
 	ln, err := net.Listen("tcp", cfg.addr)
 	if err != nil {
@@ -120,7 +132,7 @@ func (c *sftpController) apply(cfg sftpRuntimeConfig) error {
 
 	c.ln = ln
 	c.config = cfg
-	log.Printf("SFTP server started on %s (auth uses app users)", cfg.addr)
+	log.Printf("SFTP server started on %s (auth uses app users), host key %s", cfg.addr, ssh.FingerprintSHA256(c.signer.PublicKey()))
 
 	go func(localLn net.Listener, localSSH *ssh.ServerConfig) {
 		for {
@@ -132,49 +144,91 @@ func (c *sftpController) apply(cfg sftpRuntimeConfig) error {
 				log.Printf("SFTP accept error: %v", err)
 				continue
 			}
-			go c.handleConn(conn, localSSH)
+			ip := remoteHost(conn.RemoteAddr())
+			if !c.acquireIP(ip) {
+				_ = conn.Close()
+				continue
+			}
+			select {
+			case c.slots <- struct{}{}:
+				go func() {
+					defer func() { <-c.slots; c.releaseIP(ip) }()
+					c.handleConn(conn, localSSH)
+				}()
+			default:
+				// At capacity: refuse rather than queue, so floods cannot pile up goroutines
+				c.releaseIP(ip)
+				_ = conn.Close()
+			}
 		}
 	}(ln, sshConfig)
 
 	return nil
 }
 
-func boolToExt(v bool) string {
-	if v {
-		return "1"
+var errSFTPUnauthorized = errors.New("unauthorized")
+
+// checkPassword authenticates SFTP logins against app users, sharing the web login's
+// failed-attempt limits so the SFTP port cannot be used to guess passwords.
+func (c *sftpController) checkPassword(meta ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
+	username := strings.TrimSpace(meta.User())
+	if username == "" {
+		return nil, errSFTPUnauthorized
 	}
-	return "0"
+	ip := remoteHost(meta.RemoteAddr())
+	if c.server.logins.retryAfter(ip, username) > 0 {
+		return nil, errSFTPUnauthorized
+	}
+
+	c.server.mu.RLock()
+	user, ok, err := c.server.cfg.VerifyUserPassword(username, string(pass))
+	c.server.mu.RUnlock()
+	if err != nil {
+		log.Printf("SFTP login check failed: %v", err)
+		return nil, errSFTPUnauthorized
+	}
+	if !ok || user == nil {
+		c.server.logins.fail(ip, username)
+		log.Printf("SFTP login failed for %q from %s", username, ip)
+		return nil, errSFTPUnauthorized
+	}
+	c.server.logins.succeed(ip, username)
+
+	if !user.Permissions.CanReadFiles || !user.Permissions.CanUseSFTP {
+		return nil, errSFTPUnauthorized
+	}
+	return &ssh.Permissions{Extensions: map[string]string{"user_id": strconv.FormatInt(user.ID, 10)}}, nil
 }
 
-func extToBool(v string) bool {
-	return strings.TrimSpace(v) == "1"
+func remoteHost(addr net.Addr) string {
+	if addr == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return addr.String()
+	}
+	return host
 }
 
 func (c *sftpController) handleConn(conn net.Conn, sshConfig *ssh.ServerConfig) {
 	defer conn.Close()
 
+	// Unauthenticated clients get a bounded time to finish the handshake and log in
+	_ = conn.SetDeadline(time.Now().Add(sftpHandshakeTimeout))
 	serverConn, chans, reqs, err := ssh.NewServerConn(conn, sshConfig)
 	if err != nil {
 		return
 	}
 	defer serverConn.Close()
+	_ = conn.SetDeadline(time.Time{})
 	go ssh.DiscardRequests(reqs)
 
-	bridge := &sftpBridge{server: c.server}
-	if serverConn.Permissions != nil {
-		ext := serverConn.Permissions.Extensions
-		bridge.user = appconfig.User{
-			Username: strings.TrimSpace(ext["username"]),
-			Role:     strings.TrimSpace(ext["role"]),
-			Permissions: appconfig.UserPermissions{
-				CanReadFiles:         extToBool(ext["can_read_files"]),
-				CanWriteFiles:        extToBool(ext["can_write_files"]),
-				CanManageConnections: extToBool(ext["can_manage_connections"]),
-				CanManageSettings:    extToBool(ext["can_manage_settings"]),
-				CanUseSFTP:           extToBool(ext["can_use_sftp"]),
-			},
-		}
+	userID, err := strconv.ParseInt(serverConn.Permissions.Extensions["user_id"], 10, 64)
+	if err != nil {
+		return
 	}
+	bridge := &sftpBridge{server: c.server, userID: userID}
 
 	for newChannel := range chans {
 		if newChannel.ChannelType() != "session" {
@@ -213,17 +267,68 @@ func isClosedListenerError(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "closed network connection")
 }
 
-func generateHostSigner() (ssh.Signer, error) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+// loadOrCreateHostSigner keeps the SFTP host key in the config directory, so clients see the
+// same server identity after restarts instead of a "host key changed" warning every time.
+func loadOrCreateHostSigner(dir string) (ssh.Signer, error) {
+	keyPath := filepath.Join(dir, sftpHostKeyFile)
+	data, err := os.ReadFile(keyPath)
+	if err == nil {
+		signer, err := ssh.ParsePrivateKey(data)
+		if err != nil {
+			return nil, fmt.Errorf("reading SFTP host key %s: %w", keyPath, err)
+		}
+		return signer, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
 	}
-	return ssh.NewSignerFromKey(key)
+	block, err := ssh.MarshalPrivateKey(priv, "private-cloud sftp host key")
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := f.Write(pem.EncodeToMemory(block)); err != nil {
+		_ = f.Close()
+		_ = os.Remove(keyPath)
+		return nil, err
+	}
+	if err := f.Close(); err != nil {
+		return nil, err
+	}
+	log.Printf("Created SFTP host key %s", keyPath)
+	return ssh.NewSignerFromKey(priv)
 }
 
 type sftpBridge struct {
 	server *Server
-	user   appconfig.User
+	userID int64
+}
+
+// authorize re-reads the user for every operation, so disabling a user or removing a
+// permission also applies to SFTP sessions that are already connected.
+func (b *sftpBridge) authorize(write bool) error {
+	b.server.mu.RLock()
+	user, err := b.server.cfg.GetUserByID(b.userID)
+	b.server.mu.RUnlock()
+	if err != nil || user == nil || !user.IsActive {
+		return os.ErrPermission
+	}
+	p := user.Permissions
+	if !p.CanUseSFTP || !p.CanReadFiles || (write && !p.CanWriteFiles) {
+		return os.ErrPermission
+	}
+	return nil
 }
 
 func (b *sftpBridge) handleSessionChannel(channel ssh.Channel, requests <-chan *ssh.Request) {
@@ -263,8 +368,8 @@ func parseSubsystem(payload []byte) string {
 }
 
 func (b *sftpBridge) Fileread(r *sftp.Request) (io.ReaderAt, error) {
-	if !b.user.Permissions.CanReadFiles {
-		return nil, os.ErrPermission
+	if err := b.authorize(false); err != nil {
+		return nil, err
 	}
 
 	store, err := b.currentStore()
@@ -333,8 +438,8 @@ func (r *rangeReaderAt) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func (b *sftpBridge) Filewrite(r *sftp.Request) (io.WriterAt, error) {
-	if !b.user.Permissions.CanWriteFiles {
-		return nil, os.ErrPermission
+	if err := b.authorize(true); err != nil {
+		return nil, err
 	}
 
 	store, err := b.currentStore()
@@ -361,8 +466,8 @@ func (b *sftpBridge) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 }
 
 func (b *sftpBridge) Filecmd(r *sftp.Request) error {
-	if !b.user.Permissions.CanWriteFiles {
-		return os.ErrPermission
+	if err := b.authorize(true); err != nil {
+		return err
 	}
 
 	store, err := b.currentStore()
@@ -396,8 +501,8 @@ func (b *sftpBridge) Filecmd(r *sftp.Request) error {
 }
 
 func (b *sftpBridge) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
-	if !b.user.Permissions.CanReadFiles {
-		return nil, os.ErrPermission
+	if err := b.authorize(false); err != nil {
+		return nil, err
 	}
 
 	store, err := b.currentStore()

@@ -454,7 +454,7 @@ func upsertSetting(tx *sql.Tx, key, value string) error {
 }
 
 func bootstrapConfig() (*Config, error) {
-	password := getEnv("AUTH_PASSWORD", "admin@123")
+	password := getEnv("AUTH_PASSWORD", DefaultAdminPassword)
 	passwordHash, err := hashSecret(password)
 	if err != nil {
 		return nil, err
@@ -891,12 +891,43 @@ func (c *Config) SetUserPassword(userID int64, password string) error {
 		return err
 	}
 
-	_, err = c.db.Exec(`
+	tx, err := c.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var username string
+	if err := tx.QueryRow(`SELECT username FROM users WHERE id = ?`, userID).Scan(&username); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrUserNotFound
+		}
+		return err
+	}
+	if _, err := tx.Exec(`
 		UPDATE users
 		SET password_hash = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
-	`, hash, userID)
-	return err
+	`, hash, userID); err != nil {
+		return err
+	}
+
+	// The configured owner's hash is re-applied on every start (ensureOwnerUser),
+	// so keep it in step or the old password would come back after a restart.
+	isConfiguredOwner := strings.EqualFold(strings.TrimSpace(username), strings.TrimSpace(c.AdminUser))
+	if isConfiguredOwner {
+		if err := upsertSetting(tx, "admin_password_hash", hash); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if isConfiguredOwner {
+		c.AdminPasswordHash = hash
+		c.AdminPass = ""
+	}
+	return nil
 }
 
 func (c *Config) DeleteUser(userID int64) error {
@@ -938,4 +969,33 @@ func (c *Config) DeleteUser(userID int64) error {
 	}
 
 	return nil
+}
+
+// DefaultAdminPassword is the well-known password used when AUTH_PASSWORD is not set on first start.
+const DefaultAdminPassword = "admin@123"
+
+// Dir returns the directory holding the database and other server state (keys).
+func Dir() string {
+	return filepath.Dir(getEnv("CONFIG_DB_PATH", dbFile))
+}
+
+// OwnerUsesDefaultPassword reports whether any active owner can still sign in with DefaultAdminPassword.
+func (c *Config) OwnerUsesDefaultPassword() (bool, error) {
+	users, err := c.ListUsers()
+	if err != nil {
+		return false, err
+	}
+	for _, u := range users {
+		if u.Role != RoleOwner || !u.IsActive {
+			continue
+		}
+		_, ok, err := c.VerifyUserPassword(u.Username, DefaultAdminPassword)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	return false, nil
 }

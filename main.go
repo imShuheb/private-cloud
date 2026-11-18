@@ -3,9 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,6 +24,10 @@ func main() {
 	cfg, err := appconfig.Load()
 	if err != nil {
 		log.Fatalf("config error: %v", err)
+	}
+
+	if err := checkDefaultPassword(cfg); err != nil {
+		log.Fatal(err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -83,4 +90,26 @@ func main() {
 			log.Printf("shutdown: %v", err)
 		}
 	}
+}
+
+// checkDefaultPassword refuses to start while an owner still has the well-known default
+// password, since anyone who finds the server could sign in. ALLOW_DEFAULT_PASSWORD=true
+// overrides this for a first local run, so the password can be changed in the web UI.
+func checkDefaultPassword(cfg *appconfig.Config) error {
+	usesDefault, err := cfg.OwnerUsesDefaultPassword()
+	if err != nil {
+		return fmt.Errorf("checking owner password: %w", err)
+	}
+	if !usesDefault {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("ALLOW_DEFAULT_PASSWORD"))) {
+	case "1", "true", "yes", "on":
+		log.Printf("WARNING: the owner account still uses the default password %q. Change it in Settings -> Users & Access before exposing this server.", appconfig.DefaultAdminPassword)
+		return nil
+	}
+	return fmt.Errorf("refusing to start: the owner account uses the default password %q. "+
+		"On a new install, set AUTH_PASSWORD to a strong password. "+
+		"On an existing install, start once with ALLOW_DEFAULT_PASSWORD=true on a private network, "+
+		"change the password in Settings -> Users & Access, then remove that variable", appconfig.DefaultAdminPassword)
 }

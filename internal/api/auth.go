@@ -29,8 +29,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limitKey := loginLimitKey(r, username)
-	if wait := s.logins.retryAfter(limitKey); wait > 0 {
+	ip := clientIP(r)
+	if wait := s.logins.retryAfter(ip, username); wait > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
 		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("too many failed attempts, try again in %d minutes", int(wait.Minutes())+1))
 		return
@@ -44,7 +44,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil || !validPassword || user == nil {
-		s.logins.fail(limitKey)
+		s.logins.fail(ip, username)
 		writeError(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
@@ -52,7 +52,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "this account is disabled")
 		return
 	}
-	s.logins.reset(limitKey)
+	s.logins.succeed(ip, username)
 
 	sessionID, expiresAt, err := s.sm.create(user.ID, user.Username, user.Role, user.Permissions)
 	if err != nil {
