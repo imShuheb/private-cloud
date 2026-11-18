@@ -40,14 +40,14 @@ If you do not want to clone the repo or build anything, run the prebuilt image d
        -p 2022:2022 \
        -v private-cloud-config:/app/config \
        -e AUTH_USERNAME=admin \
-       -e AUTH_PASSWORD=admin@123 \
+       -e AUTH_PASSWORD='choose-a-strong-password' \
        -e SFTP_ENABLED=false \
        shuheb04/private-cloud:latest
     ```
 
 3. Open app:
     - Web UI: `http://localhost:8080`
-    - Login: `admin` / `admin@123`
+    - Login: `admin` and the password you set
 
 ### Option B: Prebuilt image with docker compose
 
@@ -64,7 +64,7 @@ services:
          - private-cloud-config:/app/config
       environment:
          AUTH_USERNAME: admin
-         AUTH_PASSWORD: admin@123
+         AUTH_PASSWORD: choose-a-strong-password
          SFTP_ENABLED: "false"
       restart: unless-stopped
 
@@ -90,7 +90,7 @@ docker run -d \
    -p 2022:2022 \
    -v private-cloud-config:/app/config \
    -e AUTH_USERNAME=admin \
-   -e AUTH_PASSWORD=admin@123 \
+   -e AUTH_PASSWORD='choose-a-strong-password' \
    -e SFTP_ENABLED=false \
    shuheb04/private-cloud:latest
 ```
@@ -110,7 +110,7 @@ If you want local source files and full project control:
 
 2. **Login & Setup**:
    - Access the dashboard at `http://localhost:8080`.
-   - Login with default credentials: `admin` / `admin@123`.
+   - Set `AUTH_PASSWORD` in `.env` first (the server refuses to start with the default password), then log in as `admin`.
    - Go to **Connections** to add your first storage bucket.
    - Optional: configure SFTP in **Settings -> Server Settings**.
 
@@ -127,7 +127,9 @@ While storage is managed via the UI, you can set these environment variables in 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `AUTH_USERNAME` | Master Admin Username | `admin` |
-| `AUTH_PASSWORD` | Master Admin Password | `admin@123` |
+| `AUTH_PASSWORD` | Owner password, used on first start. Required: the server refuses to start while the owner password is the old default `admin@123` | none |
+| `ALLOW_DEFAULT_PASSWORD` | `true` lets the server start with the default password once, on a private network, so you can change it in the UI | `false` |
+| `TRUST_PROXY_HEADERS` | `true` when running behind a reverse proxy: login limits use the client address from `X-Forwarded-For` (only for requests coming from a private/loopback address). Never set it when the app port is reachable directly | `false` |
 | `ADMIN_API_KEY` | Optional API key for non-cookie API access (`Authorization: Bearer ...` / `X-API-Key`) | empty |
 | `SERVER_ADDR` | Server bind address | `0.0.0.0:8080` |
 | `CONFIG_DB_PATH` | SQLite file path for app state | `config/private-storage.db` |
@@ -138,6 +140,7 @@ While storage is managed via the UI, you can set these environment variables in 
 | `APP_SECRET` | Secret used for credential encryption (any length; e.g. `openssl rand -hex 32`) | Random key generated in `config/app.key` |
 
 Notes:
+- `AUTH_PASSWORD` only applies on first start; afterwards change passwords in **Settings -> Users & Access** (changes survive restarts).
 - If `TLS_CERT_FILE` + `TLS_KEY_FILE` are set, server starts with HTTPS.
 - SFTP can also be configured at runtime from the web settings page.
 
@@ -177,6 +180,30 @@ Quick setup:
 2. Create/manage users in **Settings -> Users & Access**
 3. Enable `Allow SFTP login` for users who need SFTP access
 4. Start app and connect phone file manager to `<host>:2022` over SFTP
+
+SFTP security:
+- The server's host key is created once and kept in `config/sftp_host_ed25519_key`; its fingerprint is logged at start. Compare it with what your phone shows on first connect. Back the file up with the database.
+- Failed SFTP logins count toward the same limits as the web sign-in (10 per username and 30 in total per address, per 15 minutes).
+- At most 8 connections per address and 32 in total; unauthenticated connections are dropped after 30 seconds.
+- Disabling a user or removing their SFTP permission also stops sessions that are already connected.
+
+### 🌍 Deploy on the internet
+
+`deploy/` has a ready setup: [Caddy](https://caddyserver.com) in front of the app for automatic HTTPS, and SFTP published on port 2022.
+
+1. Get a server with a public IP and a domain that points at it (a free [DuckDNS](https://www.duckdns.org) name works).
+2. Open ports **80**, **443** and **2022** in the server's firewall. Do not open 8080.
+3. On the server:
+   ```bash
+   git clone <this repo> && cd private-cloud/deploy
+   cp .env.example .env    # set DOMAIN, AUTH_PASSWORD (strong), APP_SECRET
+   docker compose up -d --build
+   docker compose logs app | grep "host key"   # note the SFTP fingerprint
+   ```
+4. Open `https://<DOMAIN>`, add your S3 connection, and set the bucket's CORS rule to allow `GET`/`PUT` from `https://<DOMAIN>` and expose `ETag`.
+5. In **Settings -> Users & Access**, create a user for your phone with **Allow SFTP login**, then connect your SFTP app to `<DOMAIN>`, port `2022`.
+
+Back up `deploy/data/config/` (database, encryption key, SFTP host key).
 
 ### File Access Behavior (Web)
 - **Preview**: opens supported files (images, SVG, video, audio, PDF, text up to 1 MB) in the in-app viewer. PDFs, SVGs and text are fetched by the browser, which also needs the bucket's CORS rule.

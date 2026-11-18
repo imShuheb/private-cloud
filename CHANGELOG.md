@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `deploy/` setup for internet-facing servers: Caddy with automatic HTTPS in front of the app, SFTP on port 2022.
+- `TRUST_PROXY_HEADERS` so login limits see the real client address behind a reverse proxy.
+- `Strict-Transport-Security` header on HTTPS responses.
+
+### Fixed
+- Changing the owner's password in the UI no longer reverts to the old password on restart.
+
+### Security
+- The SFTP host key is kept in `config/sftp_host_ed25519_key` (Ed25519) instead of a new key on every start, which made clients warn about a changed host key.
+- SFTP logins share the web login's failed-attempt limits; a per-address limit (30 failures per 15 minutes across usernames) applies to both.
+- SFTP connections are capped (8 per address, 32 total), unauthenticated ones time out after 30 seconds, and at most 3 auth attempts are allowed per connection.
+- SFTP sessions re-check the user on every operation, so disabling a user or removing a permission applies immediately.
+- The server refuses to start while an owner account uses the default password `admin@123` (override once with `ALLOW_DEFAULT_PASSWORD=true` to change it). The Docker images no longer set that password.
+
 ## [1.3.0] - 08/10/2026
 
 ### Added

@@ -1,0 +1,44 @@
+# Internet-facing deployment: Caddy serves the web app over HTTPS (automatic
+# Let's Encrypt certificate), SFTP is published directly on port 2022.
+#
+#   cd deploy
+#   cp .env.example .env   # then fill it in
+#   docker compose up -d --build
+#
+# Open on the server's firewall: 80 and 443 (web, certificates) and 2022 (SFTP).
+# Do not publish 8080: the app trusts proxy headers, so only Caddy may reach it.
+services:
+  app:
+    build: ..
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SERVER_ADDR: 0.0.0.0:8080
+      CONFIG_DB_PATH: config/private-storage.db
+      SFTP_ENABLED: "true"
+      SFTP_ADDR: 0.0.0.0:2022
+      TRUST_PROXY_HEADERS: "true"
+    volumes:
+      # Database, encryption key and SFTP host key: back this folder up
+      - ./data/config:/app/config
+    ports:
+      - "2022:2022"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  caddy-data:
+  caddy-config:

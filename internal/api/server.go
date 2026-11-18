@@ -22,7 +22,7 @@ type Server struct {
 	sm      *sessionManager
 	sftpCtl *sftpController
 	scanner *analytics.Scanner
-	logins  *loginLimiter
+	logins  *loginGuard
 }
 
 // NewHandler builds the HTTP handler. Background work (session cleanup) stops when ctx is done.
@@ -32,7 +32,7 @@ func NewHandler(ctx context.Context, store storage.Store, cfg *appconfig.Config)
 		cfg:     cfg,
 		sm:      newSessionManager(),
 		scanner: analytics.NewScanner(),
-		logins:  newLoginLimiter(10, 15*time.Minute),
+		logins:  newLoginGuard(),
 	}
 	s.sftpCtl = newSFTPController(s)
 	if err := s.applySFTPFromConfig(); err != nil {

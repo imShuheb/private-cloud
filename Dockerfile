@@ -28,7 +28,7 @@ COPY --from=backend-builder /app/main .
 # Standard Environment Variables
 ENV SERVER_ADDR=0.0.0.0:8080
 ENV AUTH_USERNAME=admin
-ENV AUTH_PASSWORD=admin@123
+ENV AUTH_PASSWORD=
 ENV ADMIN_API_KEY=
 ENV CONFIG_DB_PATH=config/private-storage.db
 ENV SFTP_ENABLED=false
