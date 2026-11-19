@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -69,6 +70,18 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodDelete && q.Has("uploadId"):
 		f.aborted++
 		w.WriteHeader(http.StatusNoContent)
+	case r.Method == http.MethodGet && q.Get("list-type") == "2":
+		f.list(w, q.Get("prefix"), q.Get("delimiter"))
+	case r.Method == http.MethodPost && q.Has("delete"):
+		body := string(f.body(r))
+		for _, part := range strings.Split(body, "<Key>")[1:] {
+			k, _, _ := strings.Cut(part, "</Key>")
+			delete(f.objects, k)
+		}
+		fmt.Fprint(w, `<DeleteResult></DeleteResult>`)
+	case r.Method == http.MethodDelete:
+		delete(f.objects, key)
+		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodPut:
 		f.objects[key] = f.body(r)
 		f.types[key] = r.Header.Get("Content-Type")
@@ -77,6 +90,36 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "unexpected "+r.Method+" "+r.URL.String(), http.StatusBadRequest)
 	}
+}
+
+// list answers ListObjectsV2 (single page) from the stored objects.
+func (f *fakeS3) list(w http.ResponseWriter, prefix, delimiter string) {
+	keys := make([]string, 0, len(f.objects))
+	for k := range f.objects {
+		if strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString(`<ListBucketResult><IsTruncated>false</IsTruncated>`)
+	seen := map[string]bool{}
+	for _, k := range keys {
+		rest := strings.TrimPrefix(k, prefix)
+		if delimiter != "" {
+			if i := strings.Index(rest, delimiter); i >= 0 {
+				cp := prefix + rest[:i+1]
+				if !seen[cp] {
+					seen[cp] = true
+					fmt.Fprintf(&b, `<CommonPrefixes><Prefix>%s</Prefix></CommonPrefixes>`, cp)
+				}
+				continue
+			}
+		}
+		fmt.Fprintf(&b, `<Contents><Key>%s</Key><Size>%d</Size></Contents>`, k, len(f.objects[k]))
+	}
+	b.WriteString(`</ListBucketResult>`)
+	fmt.Fprint(w, b.String())
 }
 
 func newFakeStore(t *testing.T) (*S3Store, *fakeS3) {
@@ -172,5 +215,67 @@ func TestContentTypeFor(t *testing.T) {
 func TestCopySourceEscapesKey(t *testing.T) {
 	if got := copySource("bucket", "Photos 2020/a+b#1.jpg"); got != "bucket/Photos%202020/a+b%231.jpg" {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestThumbnailsHiddenAndDeletedWithFiles(t *testing.T) {
+	store, fake := newFakeStore(t)
+	for _, k := range []string{"Camera/a.jpg", "Camera/b.mp4", ThumbKey("Camera/a.jpg"), ThumbKey("Camera/b.mp4"), "notes.txt"} {
+		fake.objects[k] = []byte("x")
+	}
+
+	root, err := store.ListBrowser(t.Context(), "", "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range root.Folders {
+		if f.Prefix == ThumbPrefix {
+			t.Error("thumbnail folder shown at the root")
+		}
+	}
+	var walked []string
+	if err := store.Walk(t.Context(), "", func(o ObjectInfo) error { walked = append(walked, o.Key); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range walked {
+		if IsThumbKey(k) {
+			t.Errorf("walk returned thumbnail %s", k)
+		}
+	}
+	// Listing inside the thumbnail folder on purpose still works (the desktop app needs it)
+	inside, err := store.ListObjects(t.Context(), ThumbPrefix, "", 100)
+	if err != nil || len(inside.Items) != 2 {
+		t.Fatalf("listing thumbnails: %v %v", inside.Items, err)
+	}
+
+	if err := store.DeleteObjects(t.Context(), []string{"Camera/a.jpg"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fake.objects[ThumbKey("Camera/a.jpg")]; ok {
+		t.Error("thumbnail kept after bulk delete")
+	}
+	if err := store.DeleteObject(t.Context(), "Camera/"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fake.objects[ThumbKey("Camera/b.mp4")]; ok {
+		t.Error("thumbnail kept after folder delete")
+	}
+	if _, ok := fake.objects["notes.txt"]; !ok {
+		t.Error("unrelated file deleted")
+	}
+}
+
+func TestThumbnailURLIsStableWithinTheHour(t *testing.T) {
+	store, _ := newFakeStore(t)
+	a, err := store.PresignThumbnail(t.Context(), ThumbKey("Camera/a.jpg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := store.PresignThumbnail(t.Context(), ThumbKey("Camera/a.jpg"))
+	if a != b {
+		t.Errorf("URLs differ:\n%s\n%s", a, b)
+	}
+	if !strings.Contains(a, "X-Amz-Expires=7200") {
+		t.Errorf("unexpected expiry: %s", a)
 	}
 }

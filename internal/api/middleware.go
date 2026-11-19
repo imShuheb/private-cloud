@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"private-storage/internal/appconfig"
 	"strings"
 	"time"
@@ -55,8 +56,21 @@ func (s *Server) sessionPrincipal(r *http.Request) (principal, bool) {
 		userID:   user.ID,
 		username: user.Username,
 		role:     user.Role,
-		perms:    user.Permissions,
+		perms:    effectivePerms(user.Permissions),
 	}, true
+}
+
+// readOnly is set with READ_ONLY=true on servers that should only show files, e.g. one
+// exposed to the internet for browsing from a phone. It removes write access from every
+// account, the API key and SFTP. Pair it with an R2 token that can only read.
+var readOnly = parseEnvBool(os.Getenv("READ_ONLY"))
+
+// effectivePerms applies server-wide limits to a user's stored permissions.
+func effectivePerms(p appconfig.UserPermissions) appconfig.UserPermissions {
+	if readOnly {
+		p.CanWriteFiles = false
+	}
+	return p
 }
 
 func (s *Server) auth(next http.Handler) http.Handler {
@@ -88,7 +102,7 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			userID:    0,
 			username:  "api-key",
 			role:      appconfig.RoleOwner,
-			perms:     ownerPerms,
+			perms:     effectivePerms(ownerPerms),
 			viaAPIKey: true,
 		}
 		next.ServeHTTP(w, withPrincipal(r, p))

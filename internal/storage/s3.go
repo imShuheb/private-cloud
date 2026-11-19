@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -77,6 +78,9 @@ func (s *S3Store) ListObjects(ctx context.Context, prefix, continuationToken str
 	items := make([]ObjectInfo, 0, len(out.Contents))
 	for _, obj := range out.Contents {
 		key := aws.ToString(obj.Key)
+		if hideThumbs(prefix) && IsThumbKey(key) {
+			continue
+		}
 		items = append(items, ObjectInfo{
 			Key:          key,
 			Name:         objectNameFromKey(prefix, key),
@@ -111,6 +115,9 @@ func (s *S3Store) Walk(ctx context.Context, prefix string, fn func(ObjectInfo) e
 		}
 		for _, obj := range page.Contents {
 			key := aws.ToString(obj.Key)
+			if hideThumbs(prefix) && IsThumbKey(key) {
+				continue
+			}
 			err := fn(ObjectInfo{
 				Key:          key,
 				Name:         objectNameFromKey("", key),
@@ -163,7 +170,7 @@ func (s *S3Store) ListBrowser(ctx context.Context, prefix, continuationToken str
 	folders := make([]FolderInfo, 0, len(out.CommonPrefixes))
 	for _, cp := range out.CommonPrefixes {
 		folderPrefix := aws.ToString(cp.Prefix)
-		if folderPrefix == "" {
+		if folderPrefix == "" || (folderPrefix == ThumbPrefix && hideThumbs(normalizedPrefix)) {
 			continue
 		}
 		folders = append(folders, FolderInfo{
@@ -555,7 +562,48 @@ func (s *S3Store) PresignDownload(ctx context.Context, key string, expires time.
 	}, nil
 }
 
+// DeleteObject deletes key (recursively for folders) and the matching thumbnails.
+// PresignThumbnail signs a GET for key whose URL stays the same within each hour, so
+// browsers can cache thumbnails across page loads. The URL is valid for at least an hour.
+func (s *S3Store) PresignThumbnail(ctx context.Context, key string) (string, error) {
+	out, err := s.ps.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	}, func(o *s3.PresignOptions) {
+		o.Expires = 2 * time.Hour
+		o.Presigner = hourlyPresigner{o.Presigner}
+	})
+	if err != nil {
+		return "", err
+	}
+	return out.URL, nil
+}
+
+// hourlyPresigner rounds the signing time down to the hour, making URLs repeatable.
+type hourlyPresigner struct{ inner s3.HTTPPresignerV4 }
+
+func (p hourlyPresigner) PresignHTTP(ctx context.Context, creds aws.Credentials, r *http.Request, payloadHash, service, region string, signingTime time.Time, optFns ...func(*v4.SignerOptions)) (string, http.Header, error) {
+	return p.inner.PresignHTTP(ctx, creds, r, payloadHash, service, region, signingTime.UTC().Truncate(time.Hour), optFns...)
+}
+
 func (s *S3Store) DeleteObject(ctx context.Context, key string) error {
+	if err := s.deleteOne(ctx, key); err != nil {
+		return err
+	}
+	if !IsThumbKey(key) {
+		thumb := ThumbKey(key)
+		if strings.HasSuffix(key, "/") {
+			thumb = ThumbPrefix + key
+		}
+		// Best effort: a leftover thumbnail only costs a few kilobytes
+		if err := s.deleteOne(ctx, thumb); err != nil {
+			log.Printf("[storage] deleting thumbnail %s failed: %v", thumb, err)
+		}
+	}
+	return nil
+}
+
+func (s *S3Store) deleteOne(ctx context.Context, key string) error {
 	if strings.HasSuffix(key, "/") {
 		var continuationToken *string
 		totalDeleted := 0
@@ -605,9 +653,15 @@ func (s *S3Store) DeleteObject(ctx context.Context, key string) error {
 	return err
 }
 
+// DeleteObjects deletes files in batches of 1000, together with their thumbnails.
 func (s *S3Store) DeleteObjects(ctx context.Context, keys []string) error {
 	if len(keys) == 0 {
 		return nil
+	}
+	for _, k := range keys[:len(keys):len(keys)] {
+		if MayHaveThumbnail(k) {
+			keys = append(keys, ThumbKey(k))
+		}
 	}
 
 	for i := 0; i < len(keys); i += 1000 {

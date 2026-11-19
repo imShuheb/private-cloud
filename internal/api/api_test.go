@@ -126,6 +126,9 @@ func (m *memStore) UploadObject(_ context.Context, key, _ string, body io.Reader
 	m.objects[key] = storage.ObjectInfo{Key: key, Size: int64(len(data)), LastModified: time.Now()}
 	return nil
 }
+func (m *memStore) PresignThumbnail(_ context.Context, key string) (string, error) {
+	return "https://example.test/" + key, nil
+}
 func (m *memStore) CopyObject(_ context.Context, src, dst string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -487,5 +490,77 @@ func TestUnknownUserLoginStillChecksAPassword(t *testing.T) {
 	// A bcrypt comparison at the default cost takes tens of milliseconds
 	if time.Since(start) < 5*time.Millisecond {
 		t.Error("unknown username returned without a password check")
+	}
+}
+
+func TestDriveListAddsThumbnailLinks(t *testing.T) {
+	e := newTestEnv(t)
+	e.store.objects["Camera/IMG_1.jpg"] = storage.ObjectInfo{Key: "Camera/IMG_1.jpg", Size: 10}
+	e.store.objects["Camera/notes.txt"] = storage.ObjectInfo{Key: "Camera/notes.txt", Size: 10}
+	e.login(e.client, "admin", "admin-password")
+
+	_, body := e.do(e.client, "GET", "/api/drive/list?prefix=Camera/", nil)
+	files := body["data"].(map[string]any)["files"].([]any)
+	thumbs := map[string]any{}
+	for _, f := range files {
+		m := f.(map[string]any)
+		thumbs[m["key"].(string)] = m["thumbnailUrl"]
+	}
+	if thumbs["Camera/IMG_1.jpg"] != "https://example.test/.thumbs/Camera/IMG_1.jpg.jpg" {
+		t.Errorf("photo thumbnail: %v", thumbs["Camera/IMG_1.jpg"])
+	}
+	if thumbs["Camera/notes.txt"] != nil {
+		t.Errorf("text file got a thumbnail: %v", thumbs["Camera/notes.txt"])
+	}
+}
+
+func TestReadOnlyModeBlocksChanges(t *testing.T) {
+	old := readOnly
+	readOnly = true
+	t.Cleanup(func() { readOnly = old })
+
+	e := newTestEnv(t)
+	e.login(e.client, "admin", "admin-password")
+
+	_, me := e.do(e.client, "GET", "/api/auth/me", nil)
+	perms := me["user"].(map[string]any)["permissions"].(map[string]any)
+	if perms["canWriteFiles"] != false || perms["canReadFiles"] != true {
+		t.Errorf("permissions in read-only mode: %v", perms)
+	}
+	if status, _ := e.do(e.client, "DELETE", "/api/objects/docs/notes.txt", nil); status != http.StatusForbidden {
+		t.Errorf("delete in read-only mode: %d", status)
+	}
+	if status, _ := e.do(e.client, "POST", "/api/bulk-objects-delete", map[string]any{"keys": []string{"docs/notes.txt"}}); status != http.StatusForbidden {
+		t.Errorf("bulk delete in read-only mode: %d", status)
+	}
+	if status, _ := e.do(e.client, "POST", "/api/drive/presign/upload", map[string]any{"key": "x.jpg"}); status != http.StatusForbidden {
+		t.Errorf("upload in read-only mode: %d", status)
+	}
+	if _, ok := e.store.objects["docs/notes.txt"]; !ok {
+		t.Fatal("file deleted in read-only mode")
+	}
+	if status, _ := e.do(e.client, "GET", "/api/drive/list?prefix=docs/", nil); status != http.StatusOK {
+		t.Errorf("list in read-only mode: %d", status)
+	}
+
+	client, err := dialSFTP(startSFTP(t, e), "admin", "admin-password", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.Remove("/docs/notes.txt"); err == nil {
+		t.Error("SFTP delete in read-only mode")
+	}
+}
+
+func TestManifestServedAsJSON(t *testing.T) {
+	e := newTestEnv(t)
+	res, err := http.Get(e.srv.URL + "/manifest.webmanifest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || res.Header.Get("Content-Type") != "application/manifest+json" {
+		t.Errorf("manifest: %d %q", res.StatusCode, res.Header.Get("Content-Type"))
 	}
 }

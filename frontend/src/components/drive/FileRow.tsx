@@ -1,4 +1,4 @@
-import type { KeyboardEvent, MouseEvent } from 'react'
+import { useState, type KeyboardEvent, type MouseEvent } from 'react'
 import { cx, folderLabel, formatBytes, formatDate } from '../../lib'
 import type { DriveItem } from '../../types'
 import Menu from '../ui/Menu'
@@ -142,6 +142,25 @@ export default function FileRow({ item, selected, selectionMode, showLocation, c
   )
 }
 
+/** Thumbnail when one exists, otherwise the file-type icon (also when loading fails). */
+function Preview({ url, icon }: { url?: string; icon: { icon: string; className: string } }) {
+  const [failedUrl, setFailedUrl] = useState<string>()
+  if (url && url !== failedUrl) {
+    return (
+      <img
+        src={url}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        draggable={false}
+        onError={() => setFailedUrl(url)}
+        className="w-full h-full object-cover"
+      />
+    )
+  }
+  return <span className={cx('icon text-[56px] opacity-90', icon.className)}>{icon.icon}</span>
+}
+
 /** Grid-view card: folders are compact pills, files get a large icon preview. */
 export function FileCard({ item, selected, selectionMode, canSelect, onSelect, onToggle, ...actions }: RowProps) {
   const icon = itemIcon(item)
@@ -191,8 +210,8 @@ export function FileCard({ item, selected, selectionMode, canSelect, onSelect, o
         </span>
         <RowMenu item={item} actions={actions} />
       </div>
-      <div className="h-[132px] rounded-lg bg-surface flex items-center justify-center">
-        <span className={cx('icon text-[56px] opacity-90', icon.className)}>{icon.icon}</span>
+      <div className="h-[132px] rounded-lg bg-surface flex items-center justify-center overflow-hidden">
+        <Preview url={item.thumbnailUrl} icon={icon} />
       </div>
       <div className="px-1.5 pt-2 text-xs text-ink-2 flex justify-between gap-2">
         <span>{formatBytes(item.size)}</span>

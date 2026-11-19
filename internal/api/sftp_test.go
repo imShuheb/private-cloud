@@ -267,6 +267,16 @@ func TestSFTPLargeFolderAndRename(t *testing.T) {
 	if err := client.Rename("/Camera/.IMG_new.jpg.tmp", "/Camera/IMG_new.jpg"); err != nil {
 		t.Fatal(err)
 	}
+	e.store.objects[storage.ThumbKey("Camera/IMG_new.jpg")] = storage.ObjectInfo{Key: storage.ThumbKey("Camera/IMG_new.jpg"), Size: 1}
+	if err := client.Rename("/Camera/IMG_new.jpg", "/Camera/IMG_moved.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := e.store.objects[storage.ThumbKey("Camera/IMG_moved.jpg")]; !ok {
+		t.Error("thumbnail not moved with its file")
+	}
+	if err := client.Rename("/Camera/IMG_moved.jpg", "/Camera/IMG_new.jpg"); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := e.store.objects["Camera/.IMG_new.jpg.tmp"]; ok {
 		t.Error("temporary file left behind")
 	}

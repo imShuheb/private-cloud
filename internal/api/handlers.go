@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -89,10 +90,25 @@ func (s *Server) handleDriveList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	addThumbnails(r.Context(), store, result.Files)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"bucket": bucket,
 		"data":   result,
 	})
+}
+
+// addThumbnails sets a signed thumbnail link on photos and videos. Signing happens
+// locally, so this costs no storage requests; missing thumbnails fail to load in the
+// browser, which then shows the file icon.
+func addThumbnails(ctx context.Context, store storage.Store, files []storage.ObjectInfo) {
+	for i := range files {
+		if !storage.MayHaveThumbnail(files[i].Key) {
+			continue
+		}
+		if u, err := store.PresignThumbnail(ctx, storage.ThumbKey(files[i].Key)); err == nil {
+			files[i].ThumbnailURL = u
+		}
+	}
 }
 
 // handleDriveStats serves totals from the latest analytics scan instead of listing the
@@ -181,6 +197,7 @@ func (s *Server) handleDriveSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	addThumbnails(r.Context(), store, items)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":     items,
 		"truncated": truncated,

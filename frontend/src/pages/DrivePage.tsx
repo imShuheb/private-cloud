@@ -111,7 +111,7 @@ export default function DrivePage() {
         const items: DriveItem[] = res.items.map((obj) =>
           obj.key.endsWith('/')
             ? { kind: 'folder', key: obj.key, name: baseName(obj.key), location: parentOf(obj.key) }
-            : { kind: 'file', key: obj.key, name: baseName(obj.key), size: obj.size, lastModified: obj.lastModified, location: parentOf(obj.key) },
+            : { kind: 'file', key: obj.key, name: baseName(obj.key), size: obj.size, lastModified: obj.lastModified, location: parentOf(obj.key), thumbnailUrl: obj.thumbnailUrl },
         )
         setSearch({ status: 'ready', items, truncated: res.truncated })
       })
@@ -127,7 +127,7 @@ export default function DrivePage() {
       ? search.items
       : [
           ...listing.folders.map((f): DriveItem => ({ kind: 'folder', key: f.prefix, name: f.name })),
-          ...listing.files.map((f): DriveItem => ({ kind: 'file', key: f.key, name: f.name || baseName(f.key), size: f.size, lastModified: f.lastModified })),
+          ...listing.files.map((f): DriveItem => ({ kind: 'file', key: f.key, name: f.name || baseName(f.key), size: f.size, lastModified: f.lastModified, thumbnailUrl: f.thumbnailUrl })),
         ]
     return sortItems(base, sortField, sortDir)
   }, [searching, search.items, listing.folders, listing.files, sortField, sortDir])

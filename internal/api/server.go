@@ -4,6 +4,7 @@ import (
 	"context"
 	"io/fs"
 	"log"
+	"mime"
 	"net/http"
 	"strings"
 	"sync"
@@ -42,6 +43,9 @@ func NewHandler(ctx context.Context, store storage.Store, cfg *appconfig.Config)
 		log.Printf("failed to apply initial SFTP settings: %v", err)
 	}
 	go s.sm.cleanupLoop(ctx, 10*time.Minute)
+	if readOnly {
+		log.Println("READ_ONLY is on: files can be viewed and downloaded, not changed")
+	}
 	if key := cfg.AdminAPIKey; key != "" && len(key) < minAPIKeyLength {
 		log.Printf("WARNING: ADMIN_API_KEY is shorter than %d characters and is ignored. Generate one with: openssl rand -hex 32", minAPIKeyLength)
 	}
@@ -99,6 +103,11 @@ func NewHandler(ctx context.Context, store storage.Store, cfg *appconfig.Config)
 	})
 
 	return loggingMiddleware(securityHeaders(corsMiddleware(mainHandler)))
+}
+
+func init() {
+	// Not in Go's built-in table; browsers need it to read the home-screen app manifest
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
 }
 
 // serveSPA serves the embedded frontend, falling back to index.html for client-side routes.

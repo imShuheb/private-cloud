@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `deploy/` setup for internet-facing servers: Caddy with automatic HTTPS in front of the app, SFTP on port 2022.
 - `TRUST_PROXY_HEADERS` so login limits see the real client address behind a reverse proxy.
 - `Strict-Transport-Security` header on HTTPS responses.
+- Photo and video thumbnails in the grid view, read from `.thumbs/<key>.jpg` (written by the upcoming desktop uploader). Thumbnail links stay the same within each hour so browsers can cache them; missing thumbnails fall back to the file icon.
+- `READ_ONLY=true` turns off uploads, deletes and folder changes for every account, the API key and SFTP, for a browse-only server.
+- Add to Home Screen support: web app manifest and app icons.
 - SFTP rename (copy and delete), so sync apps that upload to a temporary name and rename it afterwards work. Folders cannot be renamed.
 
 ### Fixed
@@ -21,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Files uploaded over SFTP get a content type from their extension (JPEG, HEIC, MP4, MOV and others) instead of `application/octet-stream`.
 
 ### Security
+- The `.thumbs/` folder is hidden from listings, search, SFTP and storage insights, and thumbnails are deleted together with their files.
 - Failed logins for unknown or disabled usernames take as long as a wrong password, so response times don't reveal which accounts exist.
 - `ADMIN_API_KEY` values shorter than 32 characters are ignored (API key requests act as the owner and are not rate limited).
 - API request bodies are capped at 4 MB, except file uploads.

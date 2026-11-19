@@ -34,12 +34,14 @@ export type FileInfo = {
   size: number
   lastModified: string
   etag?: string
+  /** Signed link to a small preview; may 404 when no thumbnail was made yet. */
+  thumbnailUrl?: string
 }
 
 /** A row in the drive list: either a folder or a file, with an optional location for search results. */
 export type DriveItem =
   | { kind: 'folder'; key: string; name: string; location?: string }
-  | { kind: 'file'; key: string; name: string; size: number; lastModified: string; location?: string }
+  | { kind: 'file'; key: string; name: string; size: number; lastModified: string; location?: string; thumbnailUrl?: string }
 
 export type DriveListData = {
   currentPrefix: string

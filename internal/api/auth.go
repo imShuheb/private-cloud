@@ -77,7 +77,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			"id":          user.ID,
 			"username":    user.Username,
 			"role":        user.Role,
-			"permissions": user.Permissions,
+			"permissions": effectivePerms(user.Permissions),
 		},
 	})
 }

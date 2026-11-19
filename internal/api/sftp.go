@@ -324,7 +324,7 @@ func (b *sftpBridge) authorize(write bool) error {
 	if err != nil || user == nil || !user.IsActive {
 		return os.ErrPermission
 	}
-	p := user.Permissions
+	p := effectivePerms(user.Permissions)
 	if !p.CanUseSFTP || !p.CanReadFiles || (write && !p.CanWriteFiles) {
 		return os.ErrPermission
 	}
@@ -560,6 +560,12 @@ func renameObject(ctx context.Context, store storage.Store, from, to string) err
 			return os.ErrNotExist
 		}
 		return err
+	}
+	// Move the thumbnail too; deleting src below removes the old one
+	if storage.MayHaveThumbnail(src) && storage.MayHaveThumbnail(dst) {
+		if err := store.CopyObject(ctx, storage.ThumbKey(src), storage.ThumbKey(dst)); err != nil && !errors.Is(err, storage.ErrNotFound) {
+			log.Printf("SFTP rename: copying thumbnail of %s failed: %v", src, err)
+		}
 	}
 	return store.DeleteObject(ctx, src)
 }

@@ -14,6 +14,9 @@ A secure, modern S3-compatible cloud storage explorer. Manage multiple cloud sto
 - **Dynamic Switching**: Swap between active buckets instantly via the dashboard.
 - **In-app Preview**: Images, SVG, video, audio, PDF and text/code files open in a full-screen viewer; Download saves the file.
 - **Built-in SFTP Bridge**: SFTP uses the same active web connection for consistent file access.
+- **Photo Thumbnails**: The grid view shows photo and video thumbnails from `.thumbs/` (made by the desktop uploader in `desktop/`).
+- **Read-only Mode**: `READ_ONLY=true` makes a browse-only server; pair it with a read-only R2 token so a break-in cannot change files.
+- **Add to Home Screen**: Install the web app on a phone like a native app.
 - **Settings Page**: Manage server settings and users access from a dedicated settings area.
 - **Optional HTTPS**: Native TLS support via cert/key environment variables.
 - **Modern Stack**: Built with Go 1.25+, React 18+, and Tailwind CSS.
