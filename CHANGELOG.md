@@ -11,11 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `deploy/` setup for internet-facing servers: Caddy with automatic HTTPS in front of the app, SFTP on port 2022.
 - `TRUST_PROXY_HEADERS` so login limits see the real client address behind a reverse proxy.
 - `Strict-Transport-Security` header on HTTPS responses.
+- SFTP rename (copy and delete), so sync apps that upload to a temporary name and rename it afterwards work. Folders cannot be renamed.
 
 ### Fixed
 - Changing the owner's password in the UI no longer reverts to the old password on restart.
+- Server-side uploads (SFTP and `PUT /api/objects/`) over 100 MB use multipart uploads, so files over 5 GB (long phone videos) no longer fail. Failed uploads are aborted so their parts are not billed.
+- SFTP folder listings return every file instead of only the first 1,000, so sync apps no longer re-upload files in large folders.
+- SFTP file lookups use one HEAD request instead of listing the parent folder, which found files past the first 1,000 and costs a cheaper operation class.
+- Files uploaded over SFTP get a content type from their extension (JPEG, HEIC, MP4, MOV and others) instead of `application/octet-stream`.
 
 ### Security
+- Failed logins for unknown or disabled usernames take as long as a wrong password, so response times don't reveal which accounts exist.
+- `ADMIN_API_KEY` values shorter than 32 characters are ignored (API key requests act as the owner and are not rate limited).
+- API request bodies are capped at 4 MB, except file uploads.
 - The SFTP host key is kept in `config/sftp_host_ed25519_key` (Ed25519) instead of a new key on every start, which made clients warn about a changed host key.
 - SFTP logins share the web login's failed-attempt limits; a per-address limit (30 failures per 15 minutes across usernames) applies to both.
 - SFTP connections are capped (8 per address, 32 total), unauthenticated ones time out after 30 seconds, and at most 3 auth attempts are allowed per connection.

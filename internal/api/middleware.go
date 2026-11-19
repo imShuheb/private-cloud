@@ -150,8 +150,12 @@ func requirePerm(perm permissionKey, next http.Handler) http.Handler {
 	})
 }
 
+// minAPIKeyLength rejects short keys: API key requests act as the owner and are not
+// rate limited, so the key must be too long to guess.
+const minAPIKeyLength = 32
+
 func isMatchingAPIKey(expected, provided string) bool {
-	if expected == "" || provided == "" {
+	if len(expected) < minAPIKeyLength || provided == "" {
 		return false
 	}
 	if len(expected) != len(provided) {

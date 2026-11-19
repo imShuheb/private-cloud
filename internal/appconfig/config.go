@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/joho/godotenv"
 	"golang.org/x/crypto/bcrypt"
@@ -722,15 +723,24 @@ func (c *Config) GetUserPasswordHashByUsername(username string) (string, error) 
 	return hash, nil
 }
 
+// dummyHash is compared against when the user is unknown or disabled, so every failed
+// login costs one bcrypt check and response times don't reveal which usernames exist.
+var dummyHash = sync.OnceValue(func() []byte {
+	hash, _ := bcrypt.GenerateFromPassword([]byte("not-a-real-password"), bcrypt.DefaultCost)
+	return hash
+})
+
 func (c *Config) VerifyUserPassword(username, password string) (*User, bool, error) {
 	u, err := c.GetUserByUsername(strings.TrimSpace(username))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			_ = bcrypt.CompareHashAndPassword(dummyHash(), []byte(password))
 			return nil, false, nil
 		}
 		return nil, false, err
 	}
 	if !u.IsActive {
+		_ = bcrypt.CompareHashAndPassword(dummyHash(), []byte(password))
 		return nil, false, nil
 	}
 

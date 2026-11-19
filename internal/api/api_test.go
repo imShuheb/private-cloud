@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -53,22 +54,51 @@ func (m *memStore) GetStats(context.Context) (storage.DriveStats, error) {
 func (m *memStore) ListObjects(_ context.Context, prefix, _ string, _ int32) (storage.ListResult, error) {
 	return storage.ListResult{Items: m.sorted(prefix)}, nil
 }
-func (m *memStore) ListBrowser(_ context.Context, prefix, _ string, _ int32) (storage.BrowserListResult, error) {
-	res := storage.BrowserListResult{CurrentPrefix: prefix, Folders: []storage.FolderInfo{}, Files: []storage.ObjectInfo{}}
+
+// ListBrowser pages like S3: at most limit entries, continuation token = offset.
+func (m *memStore) ListBrowser(_ context.Context, prefix, token string, limit int32) (storage.BrowserListResult, error) {
+	type entry struct {
+		folder *storage.FolderInfo
+		file   *storage.ObjectInfo
+	}
+	var entries []entry
 	seen := map[string]bool{}
+	marker := false
 	for _, o := range m.sorted(prefix) {
 		rest := strings.TrimPrefix(o.Key, prefix)
 		if rest == "" {
+			marker = true
 			continue
 		}
 		if i := strings.Index(rest, "/"); i >= 0 {
 			if !seen[rest[:i]] {
 				seen[rest[:i]] = true
-				res.Folders = append(res.Folders, storage.FolderInfo{Name: rest[:i], Prefix: prefix + rest[:i+1]})
+				entries = append(entries, entry{folder: &storage.FolderInfo{Name: rest[:i], Prefix: prefix + rest[:i+1]}})
 			}
 			continue
 		}
-		res.Files = append(res.Files, o)
+		o.Name = rest
+		entries = append(entries, entry{file: &o})
+	}
+	if prefix != "" && !marker && len(entries) == 0 {
+		return storage.BrowserListResult{}, storage.ErrNotFound
+	}
+	start, _ := strconv.Atoi(token)
+	end := len(entries)
+	if limit > 0 && start+int(limit) < end {
+		end = start + int(limit)
+	}
+	res := storage.BrowserListResult{CurrentPrefix: prefix, Folders: []storage.FolderInfo{}, Files: []storage.ObjectInfo{}}
+	for _, e := range entries[min(start, len(entries)):end] {
+		if e.folder != nil {
+			res.Folders = append(res.Folders, *e.folder)
+		} else {
+			res.Files = append(res.Files, *e.file)
+		}
+	}
+	if end < len(entries) {
+		res.IsTruncated = true
+		res.NextContinuationToken = strconv.Itoa(end)
 	}
 	return res, nil
 }
@@ -96,6 +126,17 @@ func (m *memStore) UploadObject(_ context.Context, key, _ string, body io.Reader
 	m.objects[key] = storage.ObjectInfo{Key: key, Size: int64(len(data)), LastModified: time.Now()}
 	return nil
 }
+func (m *memStore) CopyObject(_ context.Context, src, dst string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	o, ok := m.objects[src]
+	if !ok {
+		return storage.ErrNotFound
+	}
+	o.Key = dst
+	m.objects[dst] = o
+	return nil
+}
 func (m *memStore) PresignUpload(_ context.Context, key, _ string, _ time.Duration) (storage.PresignedRequest, error) {
 	return storage.PresignedRequest{URL: "https://example.test/" + key, Method: "PUT"}, nil
 }
@@ -103,7 +144,12 @@ func (m *memStore) DownloadObject(context.Context, string) (storage.DownloadObje
 	return storage.DownloadObject{}, storage.ErrNotFound
 }
 func (m *memStore) ReadRange(context.Context, string, int64, int64) ([]byte, error) { return nil, nil }
-func (m *memStore) HeadObject(context.Context, string) (storage.ObjectInfo, error) {
+func (m *memStore) HeadObject(_ context.Context, key string) (storage.ObjectInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if o, ok := m.objects[key]; ok && !strings.HasSuffix(key, "/") {
+		return o, nil
+	}
 	return storage.ObjectInfo{}, storage.ErrNotFound
 }
 func (m *memStore) PresignDownload(_ context.Context, key string, _ time.Duration, attachment string) (storage.PresignedRequest, error) {
@@ -390,4 +436,56 @@ func TestSPAFallbackAndHeaders(t *testing.T) {
 func itoa(n int64) string {
 	data, _ := json.Marshal(n)
 	return string(data)
+}
+
+func TestAPIKeyMustBeLong(t *testing.T) {
+	e := newTestEnv(t)
+	try := func(key string) int {
+		req, _ := http.NewRequest("GET", e.srv.URL+"/api/drive/list", nil)
+		req.Header.Set("X-API-Key", key)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+
+	e.cfg.AdminAPIKey = "short-key"
+	if s := try("short-key"); s != http.StatusUnauthorized {
+		t.Errorf("short API key accepted: %d", s)
+	}
+	e.cfg.AdminAPIKey = strings.Repeat("k", minAPIKeyLength)
+	if s := try(e.cfg.AdminAPIKey); s != http.StatusOK {
+		t.Errorf("long API key rejected: %d", s)
+	}
+	if s := try(strings.Repeat("x", minAPIKeyLength)); s != http.StatusUnauthorized {
+		t.Errorf("wrong API key accepted: %d", s)
+	}
+}
+
+func TestOversizedJSONBodyRejected(t *testing.T) {
+	e := newTestEnv(t)
+	body := `{"username":"admin","password":"` + strings.Repeat("a", maxAPIBodyBytes) + `"}`
+	res, err := http.Post(e.srv.URL+"/api/auth/login", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("oversized login body: %d", res.StatusCode)
+	}
+}
+
+func TestUnknownUserLoginStillChecksAPassword(t *testing.T) {
+	e := newTestEnv(t)
+	_, _, _ = e.cfg.VerifyUserPassword("nobody", "warm-up") // builds the dummy hash once
+	start := time.Now()
+	if _, ok, err := e.cfg.VerifyUserPassword("nobody", "whatever"); ok || err != nil {
+		t.Fatalf("unknown user: %v %v", ok, err)
+	}
+	// A bcrypt comparison at the default cost takes tens of milliseconds
+	if time.Since(start) < 5*time.Millisecond {
+		t.Error("unknown username returned without a password check")
+	}
 }

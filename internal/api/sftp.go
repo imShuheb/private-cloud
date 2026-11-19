@@ -493,8 +493,8 @@ func (b *sftpBridge) Filecmd(r *sftp.Request) error {
 			return os.ErrPermission
 		}
 		return store.DeleteObject(r.Context(), key)
-	case "Rename":
-		return errors.New("rename is not supported")
+	case "Rename", "PosixRename":
+		return renameObject(r.Context(), store, r.Filepath, r.Target)
 	default:
 		return errors.New("unsupported command")
 	}
@@ -541,18 +541,52 @@ func (b *sftpBridge) currentStore() (storage.Store, error) {
 	return b.server.store, nil
 }
 
-func listPath(ctx context.Context, store storage.Store, prefix string) (listerAt, error) {
-	result, err := store.ListBrowser(ctx, prefix, "", 1000)
-	if err != nil {
-		return nil, err
+// renameObject moves a file by copying it and deleting the original; object storage has no
+// rename. Many phone sync apps upload to a temporary name and rename it when complete.
+// Like POSIX rename, an existing target is replaced. Folders cannot be renamed.
+func renameObject(ctx context.Context, store storage.Store, from, to string) error {
+	src, dst := keyFromPath(from), keyFromPath(to)
+	if src == "" || dst == "" {
+		return os.ErrPermission
 	}
+	if src == dst {
+		return nil
+	}
+	if err := store.CopyObject(ctx, src, dst); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			if _, dirErr := store.ListBrowser(ctx, ensureDirSuffix(src), "", 1); dirErr == nil {
+				return errors.New("renaming folders is not supported")
+			}
+			return os.ErrNotExist
+		}
+		return err
+	}
+	return store.DeleteObject(ctx, src)
+}
 
-	items := make([]os.FileInfo, 0, len(result.Folders)+len(result.Files))
-	for _, folder := range result.Folders {
-		items = append(items, virtualFileInfo{name: folder.Name, size: 0, modTime: time.Now(), isDir: true})
-	}
-	for _, file := range result.Files {
-		items = append(items, virtualFileInfo{name: file.Name, size: file.Size, modTime: file.LastModified, isDir: false})
+// maxListEntries bounds memory for a single directory listing.
+const maxListEntries = 200000
+
+// listPath returns every entry in a folder, following pagination, so sync apps see all
+// files in large folders (a phone camera folder easily holds tens of thousands).
+func listPath(ctx context.Context, store storage.Store, prefix string) (listerAt, error) {
+	items := make([]os.FileInfo, 0)
+	token := ""
+	for {
+		result, err := store.ListBrowser(ctx, prefix, token, 1000)
+		if err != nil {
+			return nil, err
+		}
+		for _, folder := range result.Folders {
+			items = append(items, virtualFileInfo{name: folder.Name, size: 0, modTime: time.Now(), isDir: true})
+		}
+		for _, file := range result.Files {
+			items = append(items, virtualFileInfo{name: file.Name, size: file.Size, modTime: file.LastModified, isDir: false})
+		}
+		if !result.IsTruncated || result.NextContinuationToken == "" || len(items) >= maxListEntries {
+			break
+		}
+		token = result.NextContinuationToken
 	}
 
 	sort.Slice(items, func(i, j int) bool {
@@ -570,24 +604,19 @@ func statPath(ctx context.Context, store storage.Store, p string) (os.FileInfo, 
 		return virtualFileInfo{name: "/", isDir: true, modTime: time.Now()}, nil
 	}
 
-	parent := parentPrefix(key)
-	res, err := store.ListBrowser(ctx, parent, "", 1000)
+	// A HEAD finds the file directly, however many siblings it has
+	info, err := store.HeadObject(ctx, key)
 	if err == nil {
-		base := path.Base(key)
-		for _, folder := range res.Folders {
-			if folder.Name == base {
-				return virtualFileInfo{name: base, isDir: true, modTime: time.Now()}, nil
-			}
-		}
-		for _, file := range res.Files {
-			if file.Name == base {
-				return virtualFileInfo{name: base, size: file.Size, modTime: file.LastModified, isDir: false}, nil
-			}
-		}
+		return virtualFileInfo{name: path.Base(key), size: info.Size, modTime: info.LastModified, isDir: false}, nil
+	}
+	if !errors.Is(err, storage.ErrNotFound) {
+		return nil, err
 	}
 
 	if _, err := store.ListBrowser(ctx, ensureDirSuffix(key), "", 1); err == nil {
 		return virtualFileInfo{name: path.Base(key), isDir: true, modTime: time.Now()}, nil
+	} else if !errors.Is(err, storage.ErrNotFound) {
+		return nil, err
 	}
 
 	return nil, os.ErrNotExist
@@ -632,8 +661,8 @@ func (w *uploadWriterAt) Close() error {
 		return err
 	}
 
-	contentType := "application/octet-stream"
-	if err := w.store.UploadObject(w.ctx, w.key, contentType, w.file, info.Size()); err != nil {
+	// The storage layer picks the content type from the file extension
+	if err := w.store.UploadObject(w.ctx, w.key, "", w.file, info.Size()); err != nil {
 		_ = w.file.Close()
 		_ = os.Remove(w.file.Name())
 		return err

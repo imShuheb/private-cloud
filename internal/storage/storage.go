@@ -78,5 +78,7 @@ type Store interface {
 	// PresignDownload signs a GET; with attachmentName set the browser saves the file under that name.
 	PresignDownload(ctx context.Context, key string, expires time.Duration, attachmentName string) (PresignedRequest, error)
 	DeleteObject(ctx context.Context, key string) error
+	// CopyObject copies the object src to dst, or returns ErrNotFound.
+	CopyObject(ctx context.Context, src, dst string) error
 	DeleteObjects(ctx context.Context, keys []string) error
 }

@@ -25,6 +25,9 @@ type Server struct {
 	logins  *loginGuard
 }
 
+// maxAPIBodyBytes caps JSON request bodies (a 10,000-key bulk delete fits easily).
+const maxAPIBodyBytes = 4 << 20
+
 // NewHandler builds the HTTP handler. Background work (session cleanup) stops when ctx is done.
 func NewHandler(ctx context.Context, store storage.Store, cfg *appconfig.Config) http.Handler {
 	s := &Server{
@@ -39,6 +42,9 @@ func NewHandler(ctx context.Context, store storage.Store, cfg *appconfig.Config)
 		log.Printf("failed to apply initial SFTP settings: %v", err)
 	}
 	go s.sm.cleanupLoop(ctx, 10*time.Minute)
+	if key := cfg.AdminAPIKey; key != "" && len(key) < minAPIKeyLength {
+		log.Printf("WARNING: ADMIN_API_KEY is shorter than %d characters and is ignored. Generate one with: openssl rand -hex 32", minAPIKeyLength)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/auth/login", s.handleLogin)
@@ -82,6 +88,10 @@ func NewHandler(ctx context.Context, store storage.Store, cfg *appconfig.Config)
 	mainHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" {
 			w.Header().Set("Cache-Control", "no-store")
+			// JSON requests are small; only file uploads may send large bodies
+			if !(r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/objects/")) {
+				r.Body = http.MaxBytesReader(w, r.Body, maxAPIBodyBytes)
+			}
 			mux.ServeHTTP(w, r)
 			return
 		}

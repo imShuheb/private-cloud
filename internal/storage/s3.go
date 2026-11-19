@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,7 +9,10 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/url"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -203,19 +207,232 @@ func (s *S3Store) ListBrowser(ctx context.Context, prefix, continuationToken str
 	}, nil
 }
 
+// UploadObject stores body under key. Files larger than singlePutLimit (or of unknown
+// size) are sent as a multipart upload, since a single PUT is capped at 5 GiB.
+// An empty or generic content type is replaced with one guessed from the file extension.
 func (s *S3Store) UploadObject(ctx context.Context, key, contentType string, body io.Reader, size int64) error {
-	input := &s3.PutObjectInput{
+	contentType = ContentTypeFor(key, contentType)
+	if size < 0 || size > singlePutLimit {
+		return s.uploadMultipart(ctx, key, contentType, body, size)
+	}
+	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(s.bucket),
+		Key:           aws.String(key),
+		Body:          body,
+		ContentType:   aws.String(contentType),
+		ContentLength: aws.Int64(size),
+	})
+	return err
+}
+
+// Variables so tests can exercise multipart uploads with small files.
+var (
+	// singlePutLimit is the largest file sent in one PUT; bigger files go in parts.
+	singlePutLimit int64 = 100 << 20
+	minPartSize    int64 = 16 << 20
+)
+
+const (
+	unknownPart = 64 << 20
+	maxParts    = 10000
+	// partConcurrency bounds parallel part uploads, and with it memory (one buffer each).
+	partConcurrency = 4
+	// maxCopySize is the largest object a single CopyObject call may copy.
+	maxCopySize  = 5 << 30
+	copyPartSize = 512 << 20
+)
+
+// partSizeFor picks a part size that keeps the upload under maxParts parts.
+func partSizeFor(size int64) int64 {
+	if size < 0 {
+		return unknownPart
+	}
+	ps := minPartSize
+	for size/ps >= maxParts {
+		ps *= 2
+	}
+	return ps
+}
+
+func (s *S3Store) uploadMultipart(ctx context.Context, key, contentType string, body io.Reader, size int64) error {
+	created, err := s.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(key),
-		Body:        body,
 		ContentType: aws.String(contentType),
+	})
+	if err != nil {
+		return err
 	}
-	if size >= 0 {
-		// Without a length the SDK can't stream a non-seekable body (e.g. an HTTP request body)
-		input.ContentLength = aws.Int64(size)
+	uploadID := created.UploadId
+
+	partsCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var (
+		mu       sync.Mutex
+		parts    []s3Types.CompletedPart
+		firstErr error
+		wg       sync.WaitGroup
+	)
+	setErr := func(err error) {
+		mu.Lock()
+		if firstErr == nil {
+			firstErr = err
+			cancel()
+		}
+		mu.Unlock()
 	}
-	_, err := s.client.PutObject(ctx, input)
-	return err
+	failed := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return firstErr != nil
+	}
+
+	partSize := partSizeFor(size)
+	sem := make(chan struct{}, partConcurrency)
+	for partNum := int32(1); !failed(); partNum++ {
+		if partNum > maxParts {
+			setErr(fmt.Errorf("file is larger than %d parts of %d bytes", maxParts, partSize))
+			break
+		}
+		sem <- struct{}{}
+		buf := make([]byte, partSize)
+		n, readErr := io.ReadFull(body, buf)
+		last := errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF)
+		if readErr != nil && !last {
+			<-sem
+			setErr(fmt.Errorf("reading upload: %w", readErr))
+			break
+		}
+		if n == 0 && partNum > 1 {
+			<-sem
+			break
+		}
+
+		wg.Add(1)
+		go func(num int32, data []byte) {
+			defer func() { <-sem; wg.Done() }()
+			out, err := s.client.UploadPart(partsCtx, &s3.UploadPartInput{
+				Bucket:        aws.String(s.bucket),
+				Key:           aws.String(key),
+				UploadId:      uploadID,
+				PartNumber:    aws.Int32(num),
+				Body:          bytes.NewReader(data),
+				ContentLength: aws.Int64(int64(len(data))),
+			})
+			if err != nil {
+				setErr(fmt.Errorf("uploading part %d: %w", num, err))
+				return
+			}
+			mu.Lock()
+			parts = append(parts, s3Types.CompletedPart{ETag: out.ETag, PartNumber: aws.Int32(num)})
+			mu.Unlock()
+		}(partNum, buf[:n])
+
+		if last {
+			break
+		}
+	}
+	wg.Wait()
+
+	if firstErr == nil {
+		sort.Slice(parts, func(i, j int) bool { return aws.ToInt32(parts[i].PartNumber) < aws.ToInt32(parts[j].PartNumber) })
+		_, firstErr = s.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+			Bucket:          aws.String(s.bucket),
+			Key:             aws.String(key),
+			UploadId:        uploadID,
+			MultipartUpload: &s3Types.CompletedMultipartUpload{Parts: parts},
+		})
+	}
+	if firstErr != nil {
+		s.abortMultipart(ctx, key, uploadID)
+		return firstErr
+	}
+	return nil
+}
+
+// abortMultipart discards an unfinished upload so its parts are not billed as storage.
+// It runs even when ctx was cancelled, e.g. because the client disconnected.
+func (s *S3Store) abortMultipart(ctx context.Context, key string, uploadID *string) {
+	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if _, err := s.client.AbortMultipartUpload(actx, &s3.AbortMultipartUploadInput{
+		Bucket:   aws.String(s.bucket),
+		Key:      aws.String(key),
+		UploadId: uploadID,
+	}); err != nil {
+		log.Printf("[storage] aborting multipart upload of %s failed: %v", key, err)
+	}
+}
+
+// CopyObject copies src to dst inside the bucket, in parts for objects over 5 GiB.
+func (s *S3Store) CopyObject(ctx context.Context, src, dst string) error {
+	head, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(src)})
+	if err != nil {
+		if isNotFound(err) {
+			return ErrNotFound
+		}
+		return err
+	}
+	source := copySource(s.bucket, src)
+	size := aws.ToInt64(head.ContentLength)
+	if size <= maxCopySize {
+		_, err := s.client.CopyObject(ctx, &s3.CopyObjectInput{
+			Bucket:     aws.String(s.bucket),
+			Key:        aws.String(dst),
+			CopySource: aws.String(source),
+		})
+		return err
+	}
+
+	created, err := s.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket:      aws.String(s.bucket),
+		Key:         aws.String(dst),
+		ContentType: head.ContentType,
+	})
+	if err != nil {
+		return err
+	}
+	var parts []s3Types.CompletedPart
+	for off, num := int64(0), int32(1); off < size; off, num = off+copyPartSize, num+1 {
+		end := min(off+copyPartSize, size) - 1
+		out, err := s.client.UploadPartCopy(ctx, &s3.UploadPartCopyInput{
+			Bucket:          aws.String(s.bucket),
+			Key:             aws.String(dst),
+			UploadId:        created.UploadId,
+			PartNumber:      aws.Int32(num),
+			CopySource:      aws.String(source),
+			CopySourceRange: aws.String(fmt.Sprintf("bytes=%d-%d", off, end)),
+		})
+		if err != nil {
+			s.abortMultipart(ctx, dst, created.UploadId)
+			return fmt.Errorf("copying part %d: %w", num, err)
+		}
+		etag := (*string)(nil)
+		if out.CopyPartResult != nil {
+			etag = out.CopyPartResult.ETag
+		}
+		parts = append(parts, s3Types.CompletedPart{ETag: etag, PartNumber: aws.Int32(num)})
+	}
+	if _, err := s.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+		Bucket:          aws.String(s.bucket),
+		Key:             aws.String(dst),
+		UploadId:        created.UploadId,
+		MultipartUpload: &s3Types.CompletedMultipartUpload{Parts: parts},
+	}); err != nil {
+		s.abortMultipart(ctx, dst, created.UploadId)
+		return err
+	}
+	return nil
+}
+
+// copySource builds the URL-encoded "bucket/key" value CopyObject expects.
+func copySource(bucket, key string) string {
+	segments := strings.Split(key, "/")
+	for i, seg := range segments {
+		segments[i] = url.PathEscape(seg)
+	}
+	return url.PathEscape(bucket) + "/" + strings.Join(segments, "/")
 }
 
 func (s *S3Store) PresignUpload(ctx context.Context, key, contentType string, expires time.Duration) (PresignedRequest, error) {

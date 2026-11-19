@@ -2,10 +2,15 @@ package api
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"time"
+
 	"net"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"private-storage/internal/storage"
 	"testing"
 
 	"private-storage/internal/appconfig"
@@ -211,5 +216,93 @@ func TestClientIPTrustsProxyOnlyWhenEnabled(t *testing.T) {
 	req.RemoteAddr = "198.51.100.7:5000"
 	if got := clientIP(req); got != "198.51.100.7" {
 		t.Errorf("public peer: %s", got)
+	}
+}
+
+// A phone camera folder holds far more files than one listing page (1000)
+func TestSFTPLargeFolderAndRename(t *testing.T) {
+	e := newTestEnv(t)
+	for i := 0; i < 2500; i++ {
+		key := fmt.Sprintf("Camera/IMG_%05d.jpg", i)
+		e.store.objects[key] = storage.ObjectInfo{Key: key, Size: int64(i + 1), LastModified: time.Now()}
+	}
+	addr := startSFTP(t, e)
+	client, err := dialSFTP(addr, "admin", "admin-password", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	entries, err := client.ReadDir("/Camera")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2500 {
+		t.Fatalf("listed %d of 2500 files", len(entries))
+	}
+
+	// Stat finds a file past the first page, so sync apps don't upload it again
+	info, err := client.Stat("/Camera/IMG_02400.jpg")
+	if err != nil || info.Size() != 2401 || info.IsDir() {
+		t.Fatalf("stat: %v %v", info, err)
+	}
+	if info, err := client.Stat("/Camera"); err != nil || !info.IsDir() {
+		t.Fatalf("stat folder: %v %v", info, err)
+	}
+	if _, err := client.Stat("/Camera/missing.jpg"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stat missing: %v", err)
+	}
+
+	// Upload to a temporary name, then rename: the pattern many sync apps use
+	f, err := client.Create("/Camera/.IMG_new.jpg.tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte("photo")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Rename("/Camera/.IMG_new.jpg.tmp", "/Camera/IMG_new.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := e.store.objects["Camera/.IMG_new.jpg.tmp"]; ok {
+		t.Error("temporary file left behind")
+	}
+	if o, ok := e.store.objects["Camera/IMG_new.jpg"]; !ok || o.Size != 5 {
+		t.Errorf("renamed file: %+v %v", o, ok)
+	}
+	if err := client.PosixRename("/Camera/IMG_new.jpg", "/Camera/IMG_00001.jpg"); err != nil {
+		t.Fatalf("posix rename over an existing file: %v", err)
+	}
+	if err := client.Rename("/Camera", "/Camera2"); err == nil {
+		t.Error("folder rename should be refused")
+	}
+}
+
+func TestSFTPRenameNeedsWritePermission(t *testing.T) {
+	e := newTestEnv(t)
+	user, err := e.cfg.CreateLocalUser("viewer", "viewer-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	perms, _ := e.cfg.GetUserPermissions(user.ID)
+	perms.CanWriteFiles = false
+	perms.CanUseSFTP = true
+	perms.CanReadFiles = true
+	if err := e.cfg.UpsertUserPermissions(user.ID, perms); err != nil {
+		t.Fatal(err)
+	}
+	client, err := dialSFTP(startSFTP(t, e), "viewer", "viewer-password", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.Rename("/docs/notes.txt", "/docs/moved.txt"); err == nil {
+		t.Fatal("read-only user renamed a file")
+	}
+	if _, ok := e.store.objects["docs/notes.txt"]; !ok {
+		t.Fatal("file was moved")
 	}
 }
